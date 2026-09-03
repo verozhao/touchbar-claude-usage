@@ -8,13 +8,13 @@ A MacBook Pro Touch Bar companion for [Claude Code](https://code.claude.com). It
 - **Context**: how much of the active session's context window is used, plus its size
 - **Approve / Deny / Terminal** buttons whenever Claude Code asks for tool permission
 
-Everything lives in a "system modal" Touch Bar (the same private API Pock and MTMR use). The macOS Control Strip (brightness, volume, mute, Siri) stays on the right; turn off "Keep Control Strip Visible" in the menu to take the whole bar. A small `C 25%` button is added to the Control Strip to toggle the bar, and a menu-bar item mirrors the numbers and offers the same Approve / Deny actions.
+Everything lives in a "system modal" Touch Bar (the same private API Pock and MTMR use). The macOS Control Strip (brightness, volume, mute, Siri) stays on the right. Turn off "Keep Control Strip Visible" in the menu to take the whole bar. A small `C 25%` button is added to the Control Strip to toggle the bar, and a menu-bar item mirrors the numbers and offers the same Approve / Deny actions.
 
 Idle, next to the Control Strip:
 
 ![idle](docs/idle.png)
 
-A permission prompt (gauges yield to the buttons when space is tight; at full width the 5h and Context gauges stay):
+A permission prompt. Gauges yield to the buttons when space is tight, and at full width the 5h and Context gauges stay:
 
 ![prompt](docs/prompt.png)
 ![prompt, full width](docs/prompt-full.png)
@@ -31,9 +31,9 @@ claude.ai usage API ──(OAuth token from Keychain)──▶ ClaudeTouchBar.ap
                           scripts/claude-touchbar-permission-hook.sh  (Claude Code PermissionRequest hook)
 ```
 
-- **Usage limits** come from the same endpoint the `/usage` screen uses, authenticated with the OAuth token Claude Code keeps in the login keychain (`Claude Code-credentials`). The app reads it via `/usr/bin/security`; macOS asks once, click **Always Allow**. Polled every 3 min with a Claude Code User-Agent (the endpoint throttles other clients).
-- **Context** comes from Claude Code's `statusLine` JSON. `install.sh` swaps in a wrapper that saves each payload to `~/.claude/touchbar/status/<session>.json` and then runs your original status line command unchanged. The most recently updated session is shown; the menu lists all of them.
-- **Permission prompts** use a `PermissionRequest` hook. The hook writes a request file, the Touch Bar shows the tool and command, and your tap writes the answer back. The hook then returns `allow` or `deny` to Claude Code; **Deny** also interrupts the turn, like answering "No" in the terminal. Tap **Terminal** (or wait 60 s) and the hook steps aside so the normal terminal prompt appears. The hook stays out of the way when the app is not running, when its heartbeat is stale (lid closed, display asleep), over SSH, and for dialog tools such as `AskUserQuestion` or `ExitPlanMode` (add more via `passthrough_tools` in the config).
+- **Usage limits** come from the same endpoint the `/usage` screen uses, authenticated with the OAuth token Claude Code keeps in the login keychain (`Claude Code-credentials`). The app reads it via `/usr/bin/security`. If macOS asks, click **Always Allow**. Polled every 3 min with a Claude Code User-Agent (the endpoint throttles other clients).
+- **Context** comes from Claude Code's `statusLine` JSON. `install.sh` swaps in a wrapper that saves each payload to `~/.claude/touchbar/status/<session>.json` and then runs your original status line command unchanged. The most recently updated session is shown, and the menu lists all of them.
+- **Permission prompts** use a `PermissionRequest` hook. The hook writes a request file, the Touch Bar shows the tool and command, and your tap writes the answer back. The hook then returns `allow` or `deny` to Claude Code. **Deny** also interrupts the turn, like answering "No" in the terminal. Tap **Terminal** (or wait 60 s) and the hook steps aside so the normal terminal prompt appears. The hook stays out of the way when the app is not running, when its heartbeat is stale (lid closed, display asleep), over SSH, and for dialog tools such as `AskUserQuestion` or `ExitPlanMode` (add more via `passthrough_tools` in the config).
 - **Touch Bar mode.** A modal bar and the system Control Strip can only share the panel in the "App Controls with Control Strip" mode, so `install.sh` switches *System Settings → Keyboard → Touch Bar shows* to that (your previous choice is remembered and restored by `uninstall.sh`).
 
 ## Install
