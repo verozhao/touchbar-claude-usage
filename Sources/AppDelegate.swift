@@ -15,7 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var status = StatusStore(dir: baseDir.appendingPathComponent("status"))
     private lazy var perms = PermissionQueue(baseDir: baseDir)
     private let bar = TouchBarController()
-    private var statusItem: NSStatusItem!
+    private var statusItem: NSStatusItem?
     private var usageTimer: Timer?
     private var tickTimer: Timer?
     private var heartbeatTimer: Timer?
@@ -48,7 +48,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             installSignalHandlers()
         }
 
-        setupStatusItem()
+        if config.showMenuBar { setupStatusItem() }
         bar.keepControlStrip = config.keepControlStrip
         bar.onDecision = { [weak self] id, decision in self?.answer(id, decision) }
         bar.onTrayTap = { [weak self] in
@@ -248,14 +248,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        statusItem.button?.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)
-        statusItem.button?.title = "C …"
-        statusItem.menu = NSMenu()
-        statusItem.menu?.delegate = self
+        statusItem?.button?.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)
+        statusItem?.button?.title = "C"
+        statusItem?.menu = NSMenu()
+        statusItem?.menu?.delegate = self
     }
 
     private func updateStatusItem() {
-        guard let b = statusItem.button else { return }
+        guard let b = statusItem?.button else { return }
         guard config.menuBarDetails else { b.title = "C"; return }
         var parts: [String] = []
         if let s = usage.lastSnapshot {
@@ -281,6 +281,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func menuToggleAutoPresent() { config.autoPresent.toggle(); config.save(to: configURL) }
     @objc private func menuToggleSound() { config.sound.toggle(); config.save(to: configURL) }
     @objc private func menuToggleDetails() { config.menuBarDetails.toggle(); config.save(to: configURL); updateStatusItem() }
+    @objc private func menuHideIcon() {
+        config.showMenuBar = false; config.save(to: configURL)
+        if let item = statusItem { NSStatusBar.system.removeStatusItem(item) }
+        statusItem = nil
+    }
     @objc private func menuDecision(_ sender: NSMenuItem) {
         guard let pair = sender.representedObject as? [String], pair.count == 2, let d = PermissionDecision(rawValue: pair[1]) else { return }
         answer(pair[0], d)
@@ -337,6 +342,7 @@ extension AppDelegate: NSMenuDelegate {
         action("Re-show When Switching Apps", #selector(menuToggleAutoPresent), state: config.autoPresent)
         action("Sound on Permission Prompt", #selector(menuToggleSound), state: config.sound)
         action("Show Usage in Menu Bar", #selector(menuToggleDetails), state: config.menuBarDetails)
+        action("Hide Menu Bar Icon (set show_menu_bar in config.json to bring it back)", #selector(menuHideIcon))
         menu.addItem(.separator())
         action("Open claude.ai Usage Page", #selector(menuOpenUsage))
         action("Open Data Folder", #selector(menuOpenFolder))

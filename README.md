@@ -63,6 +63,7 @@ Remove everything with `./uninstall.sh` (add `--purge` to delete `~/.claude/touc
 | `sound` | false | play a sound when a permission prompt arrives |
 | `show_tray` | true | the `C 25%` button in the Control Strip |
 | `menu_bar_details` | false | show usage numbers in the menu bar title instead of a plain `C` |
+| `show_menu_bar` | true | set to false (or pick "Hide Menu Bar Icon" in the menu) to remove the `C` item; quit with `launchctl bootout gui/$UID/com.verozhao.claude-touchbar` |
 | `passthrough_tools` | `[]` | extra tool names the hook should leave to the terminal |
 
 ## Development
