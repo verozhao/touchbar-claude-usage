@@ -8,7 +8,7 @@ A MacBook Pro Touch Bar companion for [Claude Code](https://code.claude.com). It
 - **Context**: how much of the active session's context window is used, plus its size
 - **Approve / Deny / Terminal** buttons whenever Claude Code asks for tool permission
 
-Everything lives in a "system modal" Touch Bar (the same private API Pock and MTMR use). The macOS Control Strip (brightness, volume, mute, Siri) stays on the right. Turn off "Keep Control Strip Visible" in the menu to take the whole bar. A small `C 25%` button is added to the Control Strip to toggle the bar, and a menu-bar item mirrors the numbers and offers the same Approve / Deny actions.
+Everything lives in a "system modal" Touch Bar (the same private API Pock and MTMR use). The macOS Control Strip (brightness, volume, mute, Siri) stays on the right. Turn off "Keep Control Strip Visible" in the menu to take the whole bar. A small `C 25%` button is added to the Control Strip to toggle the bar, and a menu-bar item (`C`) holds the details and the same Approve / Deny actions.
 
 Idle, next to the Control Strip:
 
@@ -62,6 +62,7 @@ Remove everything with `./uninstall.sh` (add `--purge` to delete `~/.claude/touc
 | `auto_present` | true | bring the bar back when you switch apps (unless you closed it) |
 | `sound` | false | play a sound when a permission prompt arrives |
 | `show_tray` | true | the `C 25%` button in the Control Strip |
+| `menu_bar_details` | false | show usage numbers in the menu bar title instead of a plain `C` |
 | `passthrough_tools` | `[]` | extra tool names the hook should leave to the terminal |
 
 ## Development

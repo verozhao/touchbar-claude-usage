@@ -256,6 +256,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func updateStatusItem() {
         guard let b = statusItem.button else { return }
+        guard config.menuBarDetails else { b.title = "C"; return }
         var parts: [String] = []
         if let s = usage.lastSnapshot {
             if let l = s.limit(.session) { parts.append("5h \(Int(l.percent.rounded()))%") }
@@ -279,6 +280,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     @objc private func menuToggleAutoPresent() { config.autoPresent.toggle(); config.save(to: configURL) }
     @objc private func menuToggleSound() { config.sound.toggle(); config.save(to: configURL) }
+    @objc private func menuToggleDetails() { config.menuBarDetails.toggle(); config.save(to: configURL); updateStatusItem() }
     @objc private func menuDecision(_ sender: NSMenuItem) {
         guard let pair = sender.representedObject as? [String], pair.count == 2, let d = PermissionDecision(rawValue: pair[1]) else { return }
         answer(pair[0], d)
@@ -334,6 +336,7 @@ extension AppDelegate: NSMenuDelegate {
         action("Keep Control Strip Visible", #selector(menuToggleControlStrip), state: config.keepControlStrip)
         action("Re-show When Switching Apps", #selector(menuToggleAutoPresent), state: config.autoPresent)
         action("Sound on Permission Prompt", #selector(menuToggleSound), state: config.sound)
+        action("Show Usage in Menu Bar", #selector(menuToggleDetails), state: config.menuBarDetails)
         menu.addItem(.separator())
         action("Open claude.ai Usage Page", #selector(menuOpenUsage))
         action("Open Data Folder", #selector(menuOpenFolder))

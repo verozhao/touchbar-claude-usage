@@ -8,6 +8,7 @@ struct Config {
     var autoPresent: Bool = true       // re-present the bar when you switch apps (unless you closed it)
     var sound: Bool = false            // play a sound when a permission prompt arrives
     var showTray: Bool = true          // small "C 9%" button in the Control Strip
+    var menuBarDetails: Bool = false   // show usage numbers in the menu bar title (otherwise just "C")
 
     static func load(from url: URL) -> Config {
         var c = Config()
@@ -19,13 +20,14 @@ struct Config {
         if let v = o["auto_present"] as? Bool { c.autoPresent = v }
         if let v = o["sound"] as? Bool { c.sound = v }
         if let v = o["show_tray"] as? Bool { c.showTray = v }
+        if let v = o["menu_bar_details"] as? Bool { c.menuBarDetails = v }
         return c
     }
 
     func save(to url: URL) {
         let o: [String: Any] = ["wait_seconds": waitSeconds, "refresh_seconds": refreshSeconds,
                                 "keep_control_strip": keepControlStrip, "auto_present": autoPresent,
-                                "sound": sound, "show_tray": showTray]
+                                "sound": sound, "show_tray": showTray, "menu_bar_details": menuBarDetails]
         if let d = try? JSONSerialization.data(withJSONObject: o, options: [.prettyPrinted, .sortedKeys]) {
             try? d.write(to: url)
         }
