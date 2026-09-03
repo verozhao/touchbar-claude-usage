@@ -126,8 +126,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// built-in display is off (lid closed, display asleep) so prompts go straight to the terminal.
     private func writeHeartbeat() {
         guard touchBarUsable() else { return }
+        keepAwakeIfWanted()
         try? "\(ProcessInfo.processInfo.processIdentifier)\n".write(to: pidURL, atomically: true, encoding: .utf8)
         try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: pidURL.path)
+    }
+
+    /// macOS dims the Touch Bar after 60 s idle and blanks it at 75 s. Pinning the panel status
+    /// (as Touch Bar Simulator did) keeps it at full brightness; status bit 4 means "system-managed".
+    private var loggedKeepAwake = false
+    private func keepAwakeIfWanted() {
+        guard config.keepAwake else { return }
+        let st = DFRGetStatus()
+        if st & 4 != 0 || st & 1 == 0 {
+            DFRSetStatus(2)
+            if !loggedKeepAwake { NSLog("keep awake: panel status %d → %d", st, DFRGetStatus()); loggedKeepAwake = true }
+        }
     }
 
     private func touchBarUsable() -> Bool {
@@ -280,6 +293,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     @objc private func menuToggleAutoPresent() { config.autoPresent.toggle(); config.save(to: configURL) }
     @objc private func menuToggleSound() { config.sound.toggle(); config.save(to: configURL) }
+    @objc private func menuToggleAwake() { config.keepAwake.toggle(); config.save(to: configURL); keepAwakeIfWanted() }
     @objc private func menuToggleDetails() { config.menuBarDetails.toggle(); config.save(to: configURL); updateStatusItem() }
     @objc private func menuHideIcon() {
         config.showMenuBar = false; config.save(to: configURL)
@@ -341,6 +355,7 @@ extension AppDelegate: NSMenuDelegate {
         action("Keep Control Strip Visible", #selector(menuToggleControlStrip), state: config.keepControlStrip)
         action("Re-show When Switching Apps", #selector(menuToggleAutoPresent), state: config.autoPresent)
         action("Sound on Permission Prompt", #selector(menuToggleSound), state: config.sound)
+        action("Keep Touch Bar Awake (no idle dimming)", #selector(menuToggleAwake), state: config.keepAwake)
         action("Show Usage in Menu Bar", #selector(menuToggleDetails), state: config.menuBarDetails)
         action("Hide Menu Bar Icon (set show_menu_bar in config.json to bring it back)", #selector(menuHideIcon))
         menu.addItem(.separator())

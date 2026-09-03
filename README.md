@@ -63,6 +63,7 @@ Remove everything with `./uninstall.sh` (add `--purge` to delete `~/.claude/touc
 | `sound` | false | play a sound when a permission prompt arrives |
 | `show_tray` | true | the `C 25%` button in the Control Strip |
 | `menu_bar_details` | false | show usage numbers in the menu bar title instead of a plain `C` |
+| `keep_awake` | true | stop macOS from dimming the Touch Bar after 60 s idle and blanking it at 75 s (asserted every 15 s) |
 | `show_menu_bar` | true | set to false (or pick "Hide Menu Bar Icon" in the menu) to remove the `C` item; quit with `launchctl bootout gui/$UID/com.verozhao.claude-touchbar` |
 | `passthrough_tools` | `[]` | extra tool names the hook should leave to the terminal |
 
@@ -88,5 +89,6 @@ Logs: `~/.claude/touchbar/app.log`.
 - The system-modal Touch Bar and Control Strip tray item use private AppKit/DFRFoundation API. It works on macOS 12 to 13 (tested on 13.5). Apple could break it in a future release.
 - While the hook is waiting, Claude Code shows "Approve or deny on the Touch Bar…" instead of the prompt. Tap **Terminal** to answer there instead. Pressing Esc in the terminal during the wait cancels the whole turn.
 - The keychain read goes through `/usr/bin/security`. If macOS asks and you click Always Allow, that grant applies to any process using the `security` tool, not only this app.
+- `keep_awake` pins the panel status through private API. Turning it off in the menu stops re-asserting it, but macOS only returns to idle dimming after `killall ControlStrip` or a reboot.
 - 2016 to 2019 MacBook Pros have no physical Esc key. this bar does not add one (this was built on a 2020 model). Hide the bar with the `C` button when you need the virtual Esc.
 - Usage numbers depend on the OAuth token Claude Code refreshes. If Claude Code has not run for a long time the token expires and the bar shows "token expired" until you run `claude` again.
