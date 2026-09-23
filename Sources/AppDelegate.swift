@@ -81,7 +81,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let self = self else { return }
                 let fakeAct = ActivityState(rawValue: env["CLAUDE_TOUCHBAR_SNAPSHOT_ACTIVITY"] ?? "")
                     .map { SessionActivity(sessionId: "snap", state: $0, cwd: FileManager.default.currentDirectoryPath, message: nil, at: Date()) }
-                self.bar.update(usage: snap0, session: self.status.current, request: fakeReq, act: fakeAct ?? self.activity.current)
+                self.bar.update(usage: snap0, session: self.status.current, request: fakeReq,
+                                act: fakeAct ?? self.activity.current, alert: env["CLAUDE_TOUCHBAR_SNAPSHOT_ALERT"] ?? self.blockingProblem())
                 self.bar.writeSnapshot(to: snap, width: CGFloat(Double(env["CLAUDE_TOUCHBAR_SNAPSHOT_WIDTH"] ?? "") ?? 1004))
                 NSApp.terminate(nil)
             }
@@ -211,6 +212,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
 
+    /// Why nothing can run right now, if that is the case: a used-up limit, an expired token, or
+    /// no network. Anything that only makes our own usage numbers stale (a 429 on the usage
+    /// endpoint) is not an alert: Claude Code itself keeps working.
+    private func blockingProblem() -> String? {
+        let snap = usage.lastSnapshot
+        if let hit = snap?.limits.first(where: { $0.percent >= 100 }) {
+            let reset = ResetFormat.long(hit.resetsAt)
+            return "\(hit.label) limit used up" + (reset.isEmpty ? "" : " · resets \(reset)")
+        }
+        // The status line carries each session's own limits; it notices before our poll does.
+        for s in status.sessions where Date().timeIntervalSince(s.updatedAt) < 3600 {
+            if let p = s.fiveHourPercent, p >= 100 { return "5h limit used up · resets \(ResetFormat.long(s.fiveHourResetsAt))" }
+            if let p = s.sevenDayPercent, p >= 100 { return "Weekly limit used up · resets \(ResetFormat.long(s.sevenDayResetsAt))" }
+        }
+        guard let e = snap?.error else { return nil }
+        if e.hasPrefix("network:") { return "No connection to api.anthropic.com · \(e.dropFirst(8))" }
+        if e.hasPrefix("token expired") || e.hasPrefix("no token") { return e }
+        return nil   // rate-limited usage endpoint, HTTP hiccups: our numbers age, Claude Code is fine
+    }
+
     private func render() {
         let live = tracked()
         if let pin = pinnedSessionId, !live.contains(where: { $0.session.sessionId == pin }) { pinnedSessionId = nil }
@@ -231,7 +252,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 selected: entry.session.sessionId == pinnedSessionId)
         })
         bar.update(usage: usage.lastSnapshot, session: shown, request: perms.first,
-                   queued: perms.pending.count, act: act, actExtra: extra, actBadge: badge)
+                   queued: perms.pending.count, act: act, actExtra: extra, actBadge: badge,
+                   alert: blockingProblem())
         updateStatusItem()
     }
 
@@ -337,6 +359,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let c = sessionToShow()?.contextUsedPercent { parts.append("ctx \(Int(c.rounded()))%") }
         if let a = activity.current { parts.insert(a.state == .waiting ? "◆" : a.state == .done ? "✓" : "●", at: 0) }
         if perms.first != nil { parts.insert("⚠︎", at: 0) }
+        if blockingProblem() != nil { parts.insert("✗", at: 0) }
         b.title = parts.isEmpty ? "C" : parts.joined(separator: "  ")
     }
 
@@ -383,6 +406,10 @@ extension AppDelegate: NSMenuDelegate {
             action("Deny", #selector(menuDecision(_:)), represented: [req.id, "deny"])
             action("Answer in Terminal", #selector(menuDecision(_:)), represented: [req.id, "pass"])
             if perms.pending.count > 1 { line("  (+\(perms.pending.count - 1) more waiting)") }
+            menu.addItem(.separator())
+        }
+        if let problem = blockingProblem() {
+            line("✗ " + problem)
             menu.addItem(.separator())
         }
         if let s = usage.lastSnapshot {

@@ -196,9 +196,9 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
 
     // MARK: content
 
-    func update(usage: UsageSnapshot?, session: SessionStatus?, request: PermissionRequest?, queued: Int = 0, act: SessionActivity? = nil, actExtra: Int = 0, actBadge: String? = nil, now: Date = Date()) {
+    func update(usage: UsageSnapshot?, session: SessionStatus?, request: PermissionRequest?, queued: Int = 0, act: SessionActivity? = nil, actExtra: Int = 0, actBadge: String? = nil, alert: String? = nil, now: Date = Date()) {
         displayedRequestId = request?.id
-        applyActivity(act, extra: actExtra, badge: actBadge, request: request, now: now)
+        applyActivity(act, extra: actExtra, badge: actBadge, alert: alert, request: request, now: now)
         let stale = usage?.isStale ?? true
         func apply(_ g: GaugeView, _ l: UsageLimit?) {
             g.dimmed = stale || l == nil
@@ -287,10 +287,15 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
 
     /// The left-hand pill: a coloured dot for what the session is doing. Kept dot-sized so the
     /// usage gauges keep their room; extra sessions add a small count.
-    private func applyActivity(_ act: SessionActivity?, extra: Int, badge override: String?, request: PermissionRequest?, now: Date) {
+    private func applyActivity(_ act: SessionActivity?, extra: Int, badge override: String?, alert: String?, request: PermissionRequest?, now: Date) {
         let badge = override ?? (extra > 0 ? "\(extra + 1)" : "")
         if request != nil {
             activity.set(state: .waiting, text: badge, tip: "Claude Code is waiting for your approval")
+            return
+        }
+        // Nothing can run: say so in red, whatever the sessions think they are doing.
+        if let alert = alert {
+            activity.set(state: .error, text: badge.isEmpty ? "!" : badge, tip: alert)
             return
         }
         guard let a = act else {

@@ -6,6 +6,7 @@ enum ActivityState: String {
     case waiting    // Notification fired: Claude wants input (permission, question, idle nudge)
     case done       // Stop fired: the answer is on screen, waiting to be read
     case unknown    // a session that reports a status line but no activity: started before the hooks existed
+    case error      // nothing can run: a limit is used up, the token expired, or the network is down
 
     var label: String {
         switch self {
@@ -13,6 +14,7 @@ enum ActivityState: String {
         case .waiting: return "Needs you"
         case .done: return "Done"
         case .unknown: return "No activity hook"
+        case .error: return "Blocked"
         }
     }
 
@@ -22,12 +24,14 @@ enum ActivityState: String {
         case .waiting: return NSColor(srgbRed: 1.00, green: 0.62, blue: 0.04, alpha: 1)  // amber
         case .done: return NSColor(srgbRed: 0.24, green: 0.72, blue: 0.36, alpha: 1)     // green
         case .unknown: return NSColor(white: 1, alpha: 0.55)                             // grey
+        case .error: return NSColor(srgbRed: 0.90, green: 0.22, blue: 0.20, alpha: 1)    // red
         }
     }
 
     /// Sort order when several sessions report at once: the ones needing the user win.
     var rank: Int {
         switch self {
+        case .error: return -1
         case .waiting: return 0
         case .done: return 1
         case .working: return 2
