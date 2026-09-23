@@ -54,7 +54,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if config.showMenuBar { setupStatusItem() }
         bar.keepControlStrip = config.keepControlStrip
         bar.onDecision = { [weak self] id, decision in self?.answer(id, decision) }
-        bar.onActivityTap = { [weak self] in self?.cycleSession() }
+        bar.onSelectSession = { [weak self] id in
+            guard let self = self else { return }
+            self.pinnedSessionId = id
+            NSLog("following session %@", id ?? "auto")
+            self.render()
+        }
         bar.onTrayTap = { [weak self] in
             guard let self = self else { return }
             if self.bar.isPresented { self.hideBar(byUser: true) } else { self.showBar() }
@@ -205,19 +210,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Tapping the dot walks through the live sessions (most recent first), then back to "follow
-    /// whichever session is most interesting", so two terminals can share one bar.
-    private func cycleSession() {
-        let ids = tracked().map { $0.session.sessionId }
-        guard ids.count > 1 else { pinnedSessionId = nil; render(); return }
-        if let cur = pinnedSessionId, let i = ids.firstIndex(of: cur) {
-            pinnedSessionId = i + 1 < ids.count ? ids[i + 1] : nil
-        } else {
-            pinnedSessionId = ids.first
-        }
-        NSLog("following session %@", pinnedSessionId ?? "auto")
-        render()
-    }
 
     private func render() {
         let live = tracked()
@@ -230,6 +222,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let pin = pinnedSessionId, let i = live.firstIndex(where: { $0.session.sessionId == pin }) {
             badge = "\(i + 1)/\(live.count)"
         }
+        bar.setSessions(live.map { entry in
+            let ctx = entry.session.contextUsedPercent.map { " · \(Int($0.rounded()))%" } ?? ""
+            return TouchBarController.SessionChoice(
+                id: entry.session.sessionId,
+                title: TouchBarController.shortName(entry.session, limit: 18) + ctx,
+                color: entry.act.state.color,
+                selected: entry.session.sessionId == pinnedSessionId)
+        })
         bar.update(usage: usage.lastSnapshot, session: shown, request: perms.first,
                    queued: perms.pending.count, act: act, actExtra: extra, actBadge: badge)
         updateStatusItem()
