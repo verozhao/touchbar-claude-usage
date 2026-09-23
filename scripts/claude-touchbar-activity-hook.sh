@@ -5,7 +5,7 @@
 #
 # Wired as:  bash claude-touchbar-activity-hook.sh <state>
 #   working  UserPromptSubmit  (a turn started)
-#   waiting  Notification      (Claude is asking for input / idle reminder)
+#   waiting  Notification      (Claude needs something mid-turn: permission, a question)
 #   done     Stop              (the turn finished, output is ready to read)
 # Same shape as the status line writer: no python, no network, always exit 0.
 set -u
@@ -29,6 +29,17 @@ msg=""
 if [[ $input =~ \"message\"[[:space:]]*:[[:space:]]*\"([^\"]*)\" ]]; then msg=${BASH_REMATCH[1]}; fi
 msg=${msg//\\/}
 msg=$(printf '%s' "$msg" | tr -d '"' | cut -c1-120)
+
+# Claude Code sends Notification for two different things: a real mid-turn ask (permission,
+# a question) and a "waiting for your input" nudge ~60s after a turn already finished. Only the
+# first deserves amber, so a nudge that arrives once the turn is done leaves the state alone.
+if [ "$STATE" = "waiting" ] && [ -f "$ACT_DIR/$sid.json" ]; then
+  prev=$(cat "$ACT_DIR/$sid.json" 2>/dev/null)
+  case $prev in
+    *'"state":"working"'*) : ;;
+    *) exit 0 ;;
+  esac
+fi
 
 tmp="$ACT_DIR/.$sid.tmp"
 if printf '{"session_id":"%s","state":"%s","cwd":"%s","message":"%s","ts":%s}\n' \
