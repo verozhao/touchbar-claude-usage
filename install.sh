@@ -70,14 +70,28 @@ def upsert(event, marker, entry):
                 h.clear(); h.update(entry); found = True
     if not found:
         entries.append({"hooks": [entry]})
+def upsert_matched(event, marker, matcher, entry):
+    entries = hooks.setdefault(event, [])
+    for group in entries:
+        if group.get("matcher") == matcher:
+            for h in group.get("hooks", []):
+                if marker in h.get("command", ""):
+                    h.clear(); h.update(entry); return
+            group.setdefault("hooks", []).append(entry); return
+    entries.append({"matcher": matcher, "hooks": [entry]})
+
 upsert("PermissionRequest", "claude-touchbar-permission-hook", {
     "type": "command", "command": hook_cmd, "timeout": timeout,
     "statusMessage": f"Approve or deny on the Touch Bar (terminal prompt in {wait}s; Esc cancels the turn)"})
 upsert("SessionEnd", "claude-touchbar-session-end", {"type": "command", "command": end_cmd, "timeout": 10})
 # Activity: working / needs you / done, shown as a pill on the Touch Bar.
-for event, state in (("UserPromptSubmit", "working"), ("Notification", "waiting"), ("Stop", "done")):
+for event, state in (("UserPromptSubmit", "working"), ("Notification", "waiting"), ("Stop", "done"),
+                     ("SubagentStop", "agent-")):
     upsert(event, "claude-touchbar-activity-hook",
            {"type": "command", "command": f"bash {act} {state}", "timeout": 5})
+# Launching a subagent: counted so Stop keeps the session blue until the last one is back.
+upsert_matched("PreToolUse", "claude-touchbar-activity-hook", "Task|Agent",
+               {"type": "command", "command": f"bash {act} agent+", "timeout": 5})
 
 # Status line: remember the user's own command verbatim and run it after ours.
 sl = s.get("statusLine")

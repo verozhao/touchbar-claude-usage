@@ -59,7 +59,7 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
         applyPriorities(prompt: pendingLayout)
     }
 
-    private let gaugeWidth: CGFloat = 140
+    private let gaugeWidth: CGFloat = 130
     private lazy var g5h = GaugeView(title: "5h", width: gaugeWidth)
     private lazy var gWeek = GaugeView(title: "Week", width: gaugeWidth)
     private lazy var gModel = GaugeView(title: "Model", width: gaugeWidth)
@@ -144,10 +144,10 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
     private func priorities(prompt: Bool) -> [NSTouchBarItem.Identifier: NSTouchBarItem.Priority] {
         func P(_ v: Float) -> NSTouchBarItem.Priority { NSTouchBarItem.Priority(rawValue: v) }
         if prompt {
-            return [ID.brand: P(-1000), ID.week: P(-950), ID.model: P(-900), ID.fiveHour: P(-850), ID.context: P(-500), ID.activity: P(-300),
+            return [ID.brand: P(-1000), ID.model: P(-950), ID.week: P(-900), ID.fiveHour: P(-850), ID.context: P(-500), ID.activity: P(-300),
                     ID.terminal: P(0), ID.info: P(1000), ID.approve: P(1000), ID.deny: P(1000)]
         }
-        return [ID.brand: P(-1000), ID.week: P(-800), ID.model: P(-600), ID.fiveHour: P(0), ID.context: P(0), ID.activity: P(900), ID.info: P(500)]
+        return [ID.brand: P(-1000), ID.model: P(-800), ID.week: P(0), ID.fiveHour: P(0), ID.context: P(0), ID.activity: P(900), ID.info: P(500)]
     }
 
     // MARK: NSTouchBarDelegate
@@ -288,14 +288,15 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
     /// The left-hand pill: a coloured dot for what the session is doing. Kept dot-sized so the
     /// usage gauges keep their room; extra sessions add a small count.
     private func applyActivity(_ act: SessionActivity?, extra: Int, badge override: String?, alert: String?, request: PermissionRequest?, now: Date) {
-        let badge = override ?? (extra > 0 ? "\(extra + 1)" : "")
+        _ = (override, extra)   // the dot is colour only: counts live in the picker and the menu
+        let badge = ""
         if request != nil {
             activity.set(state: .waiting, text: badge, tip: "Claude Code is waiting for your approval")
             return
         }
         // Nothing can run: say so in red, whatever the sessions think they are doing.
         if let alert = alert {
-            activity.set(state: .error, text: badge.isEmpty ? "!" : badge, tip: alert)
+            activity.set(state: .error, text: badge, tip: alert)
             return
         }
         guard let a = act else {
@@ -305,6 +306,7 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
         // A "working" turn that has not checked in for a while is probably an abandoned terminal.
         let stalled = (a.state == .working && now.timeIntervalSince(a.at) > 20 * 60) || a.state == .unknown
         var tip = stalled ? "Working?" : a.state.label
+        if a.agents > 0 { tip += " · \(a.agents) background agent\(a.agents == 1 ? "" : "s")" }
         if !a.shortCwd.isEmpty { tip += " · " + a.shortCwd }
         if extra > 0 { tip += " (+\(extra) more · tap to switch)" }
         activity.set(state: a.state, text: badge, tip: tip, hollow: stalled)

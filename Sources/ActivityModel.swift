@@ -46,6 +46,7 @@ struct SessionActivity {
     let cwd: String?
     let message: String?
     let at: Date
+    var agents: Int = 0
 
     var shortCwd: String {
         guard let c = cwd, !c.isEmpty else { return "" }
@@ -92,8 +93,9 @@ final class ActivityStore {
             let at = Date(timeIntervalSince1970: ts)
             if now.timeIntervalSince(at) > maxAge { continue }
             let msg = (o["message"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            let agents = (o["agents"] as? Int) ?? Int((o["agents"] as? Double) ?? 0)
             out.append(SessionActivity(sessionId: (o["session_id"] as? String) ?? f.deletingPathExtension().lastPathComponent,
-                                       state: state, cwd: o["cwd"] as? String, message: msg, at: at))
+                                       state: state, cwd: o["cwd"] as? String, message: msg, at: at, agents: agents))
         }
         out.sort { a, b in a.state.rank != b.state.rank ? a.state.rank < b.state.rank : a.at > b.at }
         let changed = !ActivityStore.same(out, sessions)
