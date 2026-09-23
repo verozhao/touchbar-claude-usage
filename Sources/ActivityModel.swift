@@ -100,46 +100,53 @@ final class ActivityStore {
     }
 }
 
-/// Touch Bar tile: a coloured dot plus "Working · repo", sized to its text.
+/// Touch Bar tile: a coloured dot (plus a session count when more than one is live).
 final class ActivityView: NSView {
-    private let dotSize: CGFloat = 8
-    private let inset: CGFloat = 10
-    private var text: String = "Idle"
+    private let dotSize: CGFloat = 10
+    private let inset: CGFloat = 9
+    private var text: String = ""
     private var dot: NSColor? = nil
+    private var hollow = false
 
     init() {
-        super.init(frame: NSRect(x: 0, y: 0, width: 120, height: 30))
+        super.init(frame: NSRect(x: 0, y: 0, width: 28, height: 30))
         wantsLayer = true
         layer?.cornerRadius = 6
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    private var font: NSFont { NSFont.systemFont(ofSize: 12, weight: .medium) }
+    private var font: NSFont { NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold) }
 
     override var intrinsicContentSize: NSSize {
-        let w = (text as NSString).size(withAttributes: [.font: font]).width
-        return NSSize(width: min(260, inset * 2 + dotSize + 6 + ceil(w)), height: 30)
+        var w = inset * 2 + dotSize
+        if !text.isEmpty { w += 4 + ceil((text as NSString).size(withAttributes: [.font: font]).width) }
+        return NSSize(width: w, height: 30)
     }
 
-    func set(state: ActivityState?, text: String) {
+    func set(state: ActivityState?, text: String, tip: String, hollow: Bool = false) {
         self.text = text
         self.dot = state?.color
+        self.hollow = hollow
+        toolTip = tip
         invalidateIntrinsicContentSize()
         needsDisplay = true
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        (dot ?? NSColor(white: 1, alpha: 0.10)).withAlphaComponent(dot == nil ? 0.10 : 0.22).setFill()
+        NSColor(white: 1, alpha: 0.08).setFill()
         NSBezierPath(roundedRect: bounds, xRadius: 6, yRadius: 6).fill()
         var x = inset
-        if let d = dot {
-            d.setFill()
-            NSBezierPath(ovalIn: NSRect(x: x, y: (bounds.height - dotSize) / 2, width: dotSize, height: dotSize)).fill()
-            x += dotSize + 6
+        let d = dot ?? NSColor(white: 1, alpha: 0.35)
+        let circle = NSBezierPath(ovalIn: NSRect(x: x, y: (bounds.height - dotSize) / 2, width: dotSize, height: dotSize))
+        if hollow || dot == nil {
+            d.setStroke(); circle.lineWidth = 2; circle.stroke()
+        } else {
+            d.setFill(); circle.fill()
         }
-        let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.white]
+        x += dotSize + 4
+        guard !text.isEmpty else { return }
+        let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor(white: 1, alpha: 0.85)]
         let s = text as NSString
-        let h = s.size(withAttributes: attrs).height
-        s.draw(at: NSPoint(x: x, y: (bounds.height - h) / 2), withAttributes: attrs)
+        s.draw(at: NSPoint(x: x, y: (bounds.height - s.size(withAttributes: attrs).height) / 2), withAttributes: attrs)
     }
 }

@@ -215,23 +215,24 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
         }
     }
 
-    /// The left-hand pill: what the session is doing, so the bar is readable from across the room.
+    /// The left-hand pill: a coloured dot for what the session is doing. Kept dot-sized so the
+    /// usage gauges keep their room; extra sessions add a small count.
     private func applyActivity(_ act: SessionActivity?, extra: Int, request: PermissionRequest?, now: Date) {
+        let badge = extra > 0 ? "\(extra + 1)" : ""
         if request != nil {
-            activity.set(state: .waiting, text: extra > 0 ? "Needs you (+\(extra))" : "Needs you")
+            activity.set(state: .waiting, text: badge, tip: "Claude Code is waiting for your approval")
             return
         }
         guard let a = act else {
-            activity.set(state: nil, text: "Idle")
+            activity.set(state: nil, text: "", tip: "No Claude Code session running")
             return
         }
-        var text = a.state.label
         // A "working" turn that has not checked in for a while is probably an abandoned terminal.
-        if a.state == .working, now.timeIntervalSince(a.at) > 20 * 60 { text = "Working?" }
-        let where_ = a.shortCwd
-        if !where_.isEmpty { text += " · " + where_ }
-        if extra > 0 { text += " (+\(extra))" }
-        activity.set(state: a.state, text: text)
+        let stalled = a.state == .working && now.timeIntervalSince(a.at) > 20 * 60
+        var tip = stalled ? "Working?" : a.state.label
+        if !a.shortCwd.isEmpty { tip += " · " + a.shortCwd }
+        if extra > 0 { tip += " (+\(extra) more)" }
+        activity.set(state: a.state, text: badge, tip: tip, hollow: stalled)
     }
 
     // MARK: presentation (private API)
