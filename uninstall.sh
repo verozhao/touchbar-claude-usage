@@ -16,7 +16,9 @@ if not os.path.exists(settings_path): sys.exit(0)
 s = json.load(open(settings_path))
 mode = os.stat(settings_path).st_mode & 0o777
 hooks = s.get("hooks", {})
-for event, marker in (("PermissionRequest", "claude-touchbar-permission-hook"), ("SessionEnd", "claude-touchbar-session-end")):
+for event, marker in (("PermissionRequest", "claude-touchbar-permission-hook"), ("SessionEnd", "claude-touchbar-session-end"),
+                      ("UserPromptSubmit", "claude-touchbar-activity-hook"), ("Notification", "claude-touchbar-activity-hook"),
+                      ("Stop", "claude-touchbar-activity-hook")):
     if event not in hooks: continue
     kept = []
     for g in hooks[event]:

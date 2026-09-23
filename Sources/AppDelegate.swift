@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let usage = UsageFetcher()
     private lazy var status = StatusStore(dir: baseDir.appendingPathComponent("status"))
     private lazy var perms = PermissionQueue(baseDir: baseDir)
+    private lazy var activity = ActivityStore(dir: baseDir.appendingPathComponent("activity"))
     private let bar = TouchBarController()
     private var statusItem: NSStatusItem?
     private var usageTimer: Timer?
@@ -26,16 +27,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var lastRequestId: String?
     private var displayedSessionId: String?
     private var displayedSessionSince = Date.distantPast
+    private var lastActivityKey: String?
 
     // MARK: lifecycle
 
     func applicationDidFinishLaunching(_ note: Notification) {
         let fm = FileManager.default
         let priv: [FileAttributeKey: Any] = [.posixPermissions: 0o700]
-        for sub in ["", "requests", "responses", "status"] {
+        for sub in ["", "requests", "responses", "status", "activity"] {
             try? fm.createDirectory(at: baseDir.appendingPathComponent(sub), withIntermediateDirectories: true, attributes: priv)
         }
-        for sub in ["", "requests", "responses", "status"] { try? fm.setAttributes(priv, ofItemAtPath: baseDir.appendingPathComponent(sub).path) }
+        for sub in ["", "requests", "responses", "status", "activity"] { try? fm.setAttributes(priv, ofItemAtPath: baseDir.appendingPathComponent(sub).path) }
         if !fm.fileExists(atPath: configURL.path) { config.save(to: configURL) }
         config = Config.load(from: configURL)
         let env = ProcessInfo.processInfo.environment
@@ -57,9 +59,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         status.onChange = { [weak self] in self?.render() }
+        activity.onChange = { [weak self] in self?.activityChanged() }
         perms.onChange = { [weak self] in self?.requestsChanged() }
         status.start()
         perms.start()
+        activity.start()
 
         if let snap = env["CLAUDE_TOUCHBAR_SNAPSHOT"] {
             // Dev aid: render the bar offscreen (idle or prompt layout) and exit. Never touches the real Touch Bar.
@@ -68,7 +72,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                     summary: "git push origin main --force-with-lease", description: nil) : nil
             usage.fetch { [weak self] snap0 in
                 guard let self = self else { return }
-                self.bar.update(usage: snap0, session: self.status.current, request: fakeReq)
+                let fakeAct = ActivityState(rawValue: env["CLAUDE_TOUCHBAR_SNAPSHOT_ACTIVITY"] ?? "")
+                    .map { SessionActivity(sessionId: "snap", state: $0, cwd: FileManager.default.currentDirectoryPath, message: nil, at: Date()) }
+                self.bar.update(usage: snap0, session: self.status.current, request: fakeReq, act: fakeAct ?? self.activity.current)
                 self.bar.writeSnapshot(to: snap, width: CGFloat(Double(env["CLAUDE_TOUCHBAR_SNAPSHOT_WIDTH"] ?? "") ?? 1004))
                 NSApp.terminate(nil)
             }
@@ -185,8 +191,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func render() {
-        bar.update(usage: usage.lastSnapshot, session: sessionToShow(), request: perms.first, queued: perms.pending.count)
+        let act = activity.current
+        let extra = max(0, activity.sessions.count - 1)
+        bar.update(usage: usage.lastSnapshot, session: sessionToShow(), request: perms.first,
+                   queued: perms.pending.count, act: act, actExtra: extra)
         updateStatusItem()
+    }
+
+    /// A session changed state. Surface the bar (and chime) when it starts needing the user,
+    /// so an answer waiting in a background terminal does not go unnoticed.
+    private func activityChanged() {
+        render()
+        guard let a = activity.current else { lastActivityKey = nil; return }
+        let key = "\(a.sessionId):\(a.state.rawValue)"
+        defer { lastActivityKey = key }
+        guard key != lastActivityKey, a.state != .working else { return }
+        if config.sound { NSSound(named: a.state == .waiting ? "Pop" : "Tink")?.play() }
+        if !userHid || a.state == .waiting { bar.present() }
     }
 
     private func requestsChanged() {
@@ -277,13 +298,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if s.isStale { parts.insert("!", at: 0) }
         }
         if let c = sessionToShow()?.contextUsedPercent { parts.append("ctx \(Int(c.rounded()))%") }
+        if let a = activity.current { parts.insert(a.state == .waiting ? "◆" : a.state == .done ? "✓" : "●", at: 0) }
         if perms.first != nil { parts.insert("⚠︎", at: 0) }
         b.title = parts.isEmpty ? "C" : parts.joined(separator: "  ")
     }
 
     @objc private func menuShow() { showBar() }
     @objc private func menuHide() { hideBar(byUser: true) }
-    @objc private func menuRefresh() { refreshUsage(); status.reload(); perms.reload() }
+    @objc private func menuRefresh() { refreshUsage(); status.reload(); perms.reload(); activity.reload() }
     @objc private func menuOpenFolder() { NSWorkspace.shared.open(baseDir) }
     @objc private func menuOpenUsage() { NSWorkspace.shared.open(URL(string: "https://claude.ai/settings/usage")!) }
     @objc private func menuToggleControlStrip() {
@@ -346,7 +368,9 @@ extension AppDelegate: NSMenuDelegate {
             for s in status.sessions.prefix(6) {
                 let ctx = s.contextUsedPercent.map { "\(Int($0.rounded()))%" } ?? "–"
                 let name = s.sessionName ?? s.shortCwd
-                line("\(s.modelName) · \(name): context \(ctx)")
+                let act = activity.sessions.first(where: { $0.sessionId == s.sessionId })
+                let state = act.map { "[\($0.state.label)] " } ?? ""
+                line("\(state)\(s.modelName) · \(name): context \(ctx)")
             }
         }
         menu.addItem(.separator())

@@ -9,6 +9,7 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
         static let week = NSTouchBarItem.Identifier(prefix + "week")
         static let model = NSTouchBarItem.Identifier(prefix + "model")
         static let context = NSTouchBarItem.Identifier(prefix + "context")
+        static let activity = NSTouchBarItem.Identifier(prefix + "activity")
         static let info = NSTouchBarItem.Identifier(prefix + "info")
         static let approve = NSTouchBarItem.Identifier(prefix + "approve")
         static let deny = NSTouchBarItem.Identifier(prefix + "deny")
@@ -26,6 +27,7 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
     private lazy var gWeek = GaugeView(title: "Week", width: gaugeWidth)
     private lazy var gModel = GaugeView(title: "Model", width: gaugeWidth)
     private lazy var gCtx = GaugeView(title: "Context", width: gaugeWidth)
+    private lazy var activity = ActivityView()
     private lazy var info = InfoView(width: 340)
     private lazy var brand: NSTextField = {
         let l = NSTextField(labelWithString: "Claude")
@@ -57,10 +59,10 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
     }
 
     private var idleLayout: [NSTouchBarItem.Identifier] {
-        [ID.brand, ID.fiveHour, ID.week, ID.model, ID.context]
+        [ID.brand, ID.activity, ID.fiveHour, ID.week, ID.model, ID.context]
     }
     private var promptLayout: [NSTouchBarItem.Identifier] {
-        [ID.fiveHour, ID.week, ID.model, ID.context, .flexibleSpace, ID.info, ID.approve, ID.deny, ID.terminal]
+        [ID.activity, ID.fiveHour, ID.week, ID.model, ID.context, .flexibleSpace, ID.info, ID.approve, ID.deny, ID.terminal]
     }
     /// Which items NSTouchBar would keep at `width` points, honouring visibilityPriority (used by the snapshot only).
     private func fitted(_ ids: [NSTouchBarItem.Identifier], width: CGFloat, spacing: CGFloat) -> [NSTouchBarItem.Identifier] {
@@ -105,10 +107,10 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
     private func priorities(prompt: Bool) -> [NSTouchBarItem.Identifier: NSTouchBarItem.Priority] {
         func P(_ v: Float) -> NSTouchBarItem.Priority { NSTouchBarItem.Priority(rawValue: v) }
         if prompt {
-            return [ID.brand: P(-1000), ID.week: P(-950), ID.model: P(-900), ID.fiveHour: P(-850), ID.context: P(-500),
+            return [ID.brand: P(-1000), ID.week: P(-950), ID.model: P(-900), ID.fiveHour: P(-850), ID.context: P(-500), ID.activity: P(-300),
                     ID.terminal: P(0), ID.info: P(1000), ID.approve: P(1000), ID.deny: P(1000)]
         }
-        return [ID.brand: P(-1000), ID.week: P(-800), ID.model: P(-600), ID.fiveHour: P(0), ID.context: P(0), ID.info: P(500)]
+        return [ID.brand: P(-1000), ID.week: P(-800), ID.model: P(-600), ID.fiveHour: P(0), ID.context: P(0), ID.activity: P(900), ID.info: P(500)]
     }
 
     // MARK: NSTouchBarDelegate
@@ -121,6 +123,7 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
         case ID.week: item.view = gWeek; item.visibilityPriority = .low
         case ID.model: item.view = gModel; item.visibilityPriority = .normal
         case ID.context: item.view = gCtx; item.visibilityPriority = .high
+        case ID.activity: item.view = activity; item.visibilityPriority = .high
         case ID.info: item.view = info; item.visibilityPriority = .high
         case ID.approve: item.view = approveButton; item.visibilityPriority = .high
         case ID.deny: item.view = denyButton; item.visibilityPriority = .high
@@ -133,8 +136,9 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
 
     // MARK: content
 
-    func update(usage: UsageSnapshot?, session: SessionStatus?, request: PermissionRequest?, queued: Int = 0, now: Date = Date()) {
+    func update(usage: UsageSnapshot?, session: SessionStatus?, request: PermissionRequest?, queued: Int = 0, act: SessionActivity? = nil, actExtra: Int = 0, now: Date = Date()) {
         displayedRequestId = request?.id
+        applyActivity(act, extra: actExtra, request: request, now: now)
         let stale = usage?.isStale ?? true
         func apply(_ g: GaugeView, _ l: UsageLimit?) {
             g.dimmed = stale || l == nil
@@ -211,12 +215,33 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
         }
     }
 
+    /// The left-hand pill: what the session is doing, so the bar is readable from across the room.
+    private func applyActivity(_ act: SessionActivity?, extra: Int, request: PermissionRequest?, now: Date) {
+        if request != nil {
+            activity.set(state: .waiting, text: extra > 0 ? "Needs you (+\(extra))" : "Needs you")
+            return
+        }
+        guard let a = act else {
+            activity.set(state: nil, text: "Idle")
+            return
+        }
+        var text = a.state.label
+        // A "working" turn that has not checked in for a while is probably an abandoned terminal.
+        if a.state == .working, now.timeIntervalSince(a.at) > 20 * 60 { text = "Working?" }
+        let where_ = a.shortCwd
+        if !where_.isEmpty { text += " · " + where_ }
+        if extra > 0 { text += " (+\(extra))" }
+        activity.set(state: a.state, text: text)
+    }
+
     // MARK: presentation (private API)
 
     func present() {
         DFRSystemModalShowsCloseBoxWhenFrontMost(true)
         let cls: AnyClass = NSTouchBar.self
         let hasPlacement = class_getClassMethod(cls, #selector(NSTouchBar.presentSystemModalTouchBar(_:placement:systemTrayItemIdentifier:))) != nil
+        // Verified on this machine: the no-placement variant leaves the Control Strip visible;
+        // placement 1 covers it. (Opposite of what Pock's naming suggests.)
         if keepControlStrip || !hasPlacement {
             NSTouchBar.presentSystemModalTouchBar(touchBar, systemTrayItemIdentifier: ID.tray)
         } else {
@@ -270,6 +295,7 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
         case ID.week: return gWeek
         case ID.model: return gModel
         case ID.context: return gCtx
+        case ID.activity: return activity
         case ID.info: return info
         case ID.approve: return approveButton
         case ID.deny: return denyButton
