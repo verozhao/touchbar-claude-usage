@@ -107,13 +107,30 @@ final class ActivityView: NSView {
     private var text: String = ""
     private var dot: NSColor? = nil
     private var hollow = false
+    private var pressed = false
 
-    init() {
+    private weak var target: AnyObject?
+    private let action: Selector
+
+    init(target: AnyObject?, action: Selector) {
+        self.target = target
+        self.action = action
         super.init(frame: NSRect(x: 0, y: 0, width: 28, height: 30))
         wantsLayer = true
         layer?.cornerRadius = 6
     }
     required init?(coder: NSCoder) { fatalError() }
+
+    /// Tapping cycles which session the bar is following.
+    override func mouseDown(with event: NSEvent) {
+        pressed = true; needsDisplay = true
+    }
+    override func mouseUp(with event: NSEvent) {
+        pressed = false; needsDisplay = true
+        if bounds.contains(convert(event.locationInWindow, from: nil)), let t = target {
+            NSApp.sendAction(action, to: t, from: self)
+        }
+    }
 
     private var font: NSFont { NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold) }
 
@@ -133,7 +150,7 @@ final class ActivityView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        NSColor(white: 1, alpha: 0.08).setFill()
+        NSColor(white: 1, alpha: pressed ? 0.25 : 0.08).setFill()
         NSBezierPath(roundedRect: bounds, xRadius: 6, yRadius: 6).fill()
         var x = inset
         let d = dot ?? NSColor(white: 1, alpha: 0.35)

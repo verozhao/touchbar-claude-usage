@@ -20,6 +20,7 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
     let touchBar = NSTouchBar()
     var onDecision: ((String, PermissionDecision) -> Void)?
     var onTrayTap: (() -> Void)?
+    var onActivityTap: (() -> Void)?
     private var displayedRequestId: String?
 
     private let gaugeWidth: CGFloat = 140
@@ -27,7 +28,7 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
     private lazy var gWeek = GaugeView(title: "Week", width: gaugeWidth)
     private lazy var gModel = GaugeView(title: "Model", width: gaugeWidth)
     private lazy var gCtx = GaugeView(title: "Context", width: gaugeWidth)
-    private lazy var activity = ActivityView()
+    private lazy var activity = ActivityView(target: self, action: #selector(activityTapped))
     private lazy var info = InfoView(width: 340)
     private lazy var brand: NSTextField = {
         let l = NSTextField(labelWithString: "Claude")
@@ -136,9 +137,9 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
 
     // MARK: content
 
-    func update(usage: UsageSnapshot?, session: SessionStatus?, request: PermissionRequest?, queued: Int = 0, act: SessionActivity? = nil, actExtra: Int = 0, now: Date = Date()) {
+    func update(usage: UsageSnapshot?, session: SessionStatus?, request: PermissionRequest?, queued: Int = 0, act: SessionActivity? = nil, actExtra: Int = 0, actBadge: String? = nil, now: Date = Date()) {
         displayedRequestId = request?.id
-        applyActivity(act, extra: actExtra, request: request, now: now)
+        applyActivity(act, extra: actExtra, badge: actBadge, request: request, now: now)
         let stale = usage?.isStale ?? true
         func apply(_ g: GaugeView, _ l: UsageLimit?) {
             g.dimmed = stale || l == nil
@@ -169,6 +170,14 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
         apply(g5h, five)
         apply(gWeek, week)
         apply(gModel, usage?.limit(.weeklyScoped))
+        // The model-scoped weekly limit has no status-line fallback, so a rate-limited API would
+        // leave it grey for hours. Keep the last known number lit and say how old it is instead.
+        if let m = usage?.limit(.weeklyScoped) {
+            gModel.dimmed = false
+            if stale, let ok = usage?.lastSuccessAt {
+                gModel.valueText = "\(Int(m.percent.rounded()))% · \(ResetFormat.elapsed(since: ok, now: now)) ago"
+            }
+        }
         if fromStatusLine { if five != nil { g5h.dimmed = false }; if week != nil { gWeek.dimmed = false } }
 
         if let s = session, let pct = s.contextUsedPercent {
@@ -192,7 +201,8 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
                 info.set(e, color: NSColor(srgbRed: 1, green: 0.62, blue: 0.04, alpha: 1))
             } else if let s = session {
                 var parts = [s.modelName]
-                if let n = s.sessionName, !n.isEmpty { parts.append(n) } else if !s.shortCwd.isEmpty { parts.append(s.shortCwd) }
+                let name = TouchBarController.shortName(s)
+                if !name.isEmpty { parts.append(name) }
                 if let c = s.costUSD, c > 0 { parts.append(String(format: "$%.2f", c)) }
                 info.set(parts.joined(separator: " · "), color: NSColor(white: 1, alpha: 0.85))
             } else {
@@ -217,8 +227,8 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
 
     /// The left-hand pill: a coloured dot for what the session is doing. Kept dot-sized so the
     /// usage gauges keep their room; extra sessions add a small count.
-    private func applyActivity(_ act: SessionActivity?, extra: Int, request: PermissionRequest?, now: Date) {
-        let badge = extra > 0 ? "\(extra + 1)" : ""
+    private func applyActivity(_ act: SessionActivity?, extra: Int, badge override: String?, request: PermissionRequest?, now: Date) {
+        let badge = override ?? (extra > 0 ? "\(extra + 1)" : "")
         if request != nil {
             activity.set(state: .waiting, text: badge, tip: "Claude Code is waiting for your approval")
             return
@@ -231,8 +241,17 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
         let stalled = a.state == .working && now.timeIntervalSince(a.at) > 20 * 60
         var tip = stalled ? "Working?" : a.state.label
         if !a.shortCwd.isEmpty { tip += " · " + a.shortCwd }
-        if extra > 0 { tip += " (+\(extra) more)" }
+        if extra > 0 { tip += " (+\(extra) more · tap to switch)" }
         activity.set(state: a.state, text: badge, tip: tip, hollow: stalled)
+    }
+
+    /// The session's name cut down to something that fits next to the model and the cost:
+    /// its own name if it has one, otherwise the last path component of its directory.
+    static func shortName(_ s: SessionStatus, limit: Int = 22) -> String {
+        var name = s.sessionName ?? ""
+        if name.isEmpty { name = String(s.shortCwd.split(separator: "/").last ?? "") }
+        if name.count > limit { name = String(name.prefix(limit - 1)) + "…" }
+        return name
     }
 
     // MARK: presentation (private API)
@@ -357,4 +376,5 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
     @objc private func denyTapped() { if let id = displayedRequestId { onDecision?(id, .deny) } }
     @objc private func passTapped() { if let id = displayedRequestId { onDecision?(id, .pass) } }
     @objc private func trayTapped() { onTrayTap?() }
+    @objc private func activityTapped() { onActivityTap?() }
 }

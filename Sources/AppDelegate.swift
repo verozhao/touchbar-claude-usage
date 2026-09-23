@@ -28,6 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var displayedSessionId: String?
     private var displayedSessionSince = Date.distantPast
     private var lastActivityKey: String?
+    private var pinnedSessionId: String?   // set by tapping the activity dot
 
     // MARK: lifecycle
 
@@ -53,6 +54,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if config.showMenuBar { setupStatusItem() }
         bar.keepControlStrip = config.keepControlStrip
         bar.onDecision = { [weak self] id, decision in self?.answer(id, decision) }
+        bar.onActivityTap = { [weak self] in self?.cycleSession() }
         bar.onTrayTap = { [weak self] in
             guard let self = self else { return }
             if self.bar.isPresented { self.hideBar(byUser: true) } else { self.showBar() }
@@ -178,6 +180,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// active one, with 5 s of hysteresis so two busy sessions do not make the gauge flicker.
     private func sessionToShow() -> SessionStatus? {
         let sessions = status.sessions
+        if let pin = pinnedSessionId, let s = sessions.first(where: { $0.sessionId == pin }) { return s }
         if let sid = perms.first?.sessionId, let s = sessions.first(where: { $0.sessionId == sid }) {
             displayedSessionId = sid; displayedSessionSince = Date(); return s
         }
@@ -190,11 +193,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return newest
     }
 
+    /// Tapping the dot walks through the live sessions (most recent first), then back to "follow
+    /// whichever session is most interesting", so two terminals can share one bar.
+    private func cycleSession() {
+        let ids = status.sessions.map { $0.sessionId }
+        guard ids.count > 1 else { pinnedSessionId = nil; render(); return }
+        if let cur = pinnedSessionId, let i = ids.firstIndex(of: cur) {
+            pinnedSessionId = i + 1 < ids.count ? ids[i + 1] : nil
+        } else {
+            pinnedSessionId = ids.first
+        }
+        NSLog("following session %@", pinnedSessionId ?? "auto")
+        render()
+    }
+
     private func render() {
-        let act = activity.current
+        if let pin = pinnedSessionId, !status.sessions.contains(where: { $0.sessionId == pin }) { pinnedSessionId = nil }
+        let shown = sessionToShow()
+        let act = pinnedSessionId != nil
+            ? activity.sessions.first(where: { $0.sessionId == shown?.sessionId }) ?? activity.current
+            : activity.current
         let extra = max(0, activity.sessions.count - 1)
-        bar.update(usage: usage.lastSnapshot, session: sessionToShow(), request: perms.first,
-                   queued: perms.pending.count, act: act, actExtra: extra)
+        // While a session is pinned the dot shows its place in the list (2/3) instead of a count.
+        var badge: String? = nil
+        if let pin = pinnedSessionId, let i = status.sessions.firstIndex(where: { $0.sessionId == pin }) {
+            badge = "\(i + 1)/\(status.sessions.count)"
+        }
+        bar.update(usage: usage.lastSnapshot, session: shown, request: perms.first,
+                   queued: perms.pending.count, act: act, actExtra: extra, actBadge: badge)
         updateStatusItem()
     }
 
