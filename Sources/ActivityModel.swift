@@ -5,12 +5,14 @@ enum ActivityState: String {
     case working    // UserPromptSubmit fired, the turn is running
     case waiting    // Notification fired: Claude wants input (permission, question, idle nudge)
     case done       // Stop fired: the answer is on screen, waiting to be read
+    case unknown    // a session that reports a status line but no activity: started before the hooks existed
 
     var label: String {
         switch self {
         case .working: return "Working"
         case .waiting: return "Needs you"
         case .done: return "Done"
+        case .unknown: return "No activity hook"
         }
     }
 
@@ -19,6 +21,7 @@ enum ActivityState: String {
         case .working: return NSColor(srgbRed: 0.25, green: 0.55, blue: 1.0, alpha: 1)   // blue
         case .waiting: return NSColor(srgbRed: 1.00, green: 0.62, blue: 0.04, alpha: 1)  // amber
         case .done: return NSColor(srgbRed: 0.24, green: 0.72, blue: 0.36, alpha: 1)     // green
+        case .unknown: return NSColor(white: 1, alpha: 0.55)                             // grey
         }
     }
 
@@ -28,6 +31,7 @@ enum ActivityState: String {
         case .waiting: return 0
         case .done: return 1
         case .working: return 2
+        case .unknown: return 3
         }
     }
 }

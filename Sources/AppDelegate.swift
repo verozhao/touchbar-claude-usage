@@ -184,7 +184,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let sid = perms.first?.sessionId, let s = sessions.first(where: { $0.sessionId == sid }) {
             displayedSessionId = sid; displayedSessionSince = Date(); return s
         }
-        guard let newest = sessions.first else { displayedSessionId = nil; return nil }
+        guard let newest = tracked().first?.session ?? sessions.first else { displayedSessionId = nil; return nil }
         if let cur = displayedSessionId, cur != newest.sessionId, let shown = sessions.first(where: { $0.sessionId == cur }),
            newest.updatedAt.timeIntervalSince(shown.updatedAt) < 5 || Date().timeIntervalSince(displayedSessionSince) < 5 {
             return shown
@@ -193,10 +193,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return newest
     }
 
+    /// Every live terminal, with what it is doing. Sessions that started before the activity hooks
+    /// were installed have a status file but no activity file: they show as unknown rather than vanish.
+    private func tracked() -> [(session: SessionStatus, act: SessionActivity)] {
+        status.sessions.map { s in
+            let a = activity.sessions.first(where: { $0.sessionId == s.sessionId })
+                ?? SessionActivity(sessionId: s.sessionId, state: .unknown, cwd: s.cwd, message: nil, at: s.updatedAt)
+            return (s, a)
+        }.sorted { l, r in
+            l.act.state.rank != r.act.state.rank ? l.act.state.rank < r.act.state.rank : l.session.updatedAt > r.session.updatedAt
+        }
+    }
+
     /// Tapping the dot walks through the live sessions (most recent first), then back to "follow
     /// whichever session is most interesting", so two terminals can share one bar.
     private func cycleSession() {
-        let ids = status.sessions.map { $0.sessionId }
+        let ids = tracked().map { $0.session.sessionId }
         guard ids.count > 1 else { pinnedSessionId = nil; render(); return }
         if let cur = pinnedSessionId, let i = ids.firstIndex(of: cur) {
             pinnedSessionId = i + 1 < ids.count ? ids[i + 1] : nil
@@ -208,16 +220,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func render() {
-        if let pin = pinnedSessionId, !status.sessions.contains(where: { $0.sessionId == pin }) { pinnedSessionId = nil }
+        let live = tracked()
+        if let pin = pinnedSessionId, !live.contains(where: { $0.session.sessionId == pin }) { pinnedSessionId = nil }
         let shown = sessionToShow()
-        let act = pinnedSessionId != nil
-            ? activity.sessions.first(where: { $0.sessionId == shown?.sessionId }) ?? activity.current
-            : activity.current
-        let extra = max(0, activity.sessions.count - 1)
+        let act = live.first(where: { $0.session.sessionId == shown?.sessionId })?.act ?? live.first?.act
+        let extra = max(0, live.count - 1)
         // While a session is pinned the dot shows its place in the list (2/3) instead of a count.
         var badge: String? = nil
-        if let pin = pinnedSessionId, let i = status.sessions.firstIndex(where: { $0.sessionId == pin }) {
-            badge = "\(i + 1)/\(status.sessions.count)"
+        if let pin = pinnedSessionId, let i = live.firstIndex(where: { $0.session.sessionId == pin }) {
+            badge = "\(i + 1)/\(live.count)"
         }
         bar.update(usage: usage.lastSnapshot, session: shown, request: perms.first,
                    queued: perms.pending.count, act: act, actExtra: extra, actBadge: badge)
@@ -388,15 +399,14 @@ extension AppDelegate: NSMenuDelegate {
             line("Usage: loading…")
         }
         menu.addItem(.separator())
-        if status.sessions.isEmpty {
+        if tracked().isEmpty {
             line("No active Claude Code session")
         } else {
-            for s in status.sessions.prefix(6) {
+            for (s, a) in tracked().prefix(6) {
                 let ctx = s.contextUsedPercent.map { "\(Int($0.rounded()))%" } ?? "–"
-                let name = s.sessionName ?? s.shortCwd
-                let act = activity.sessions.first(where: { $0.sessionId == s.sessionId })
-                let state = act.map { "[\($0.state.label)] " } ?? ""
-                line("\(state)\(s.modelName) · \(name): context \(ctx)")
+                let mark = pinnedSessionId == s.sessionId ? "▸ " : "  "
+                let hint = a.state == .unknown ? " (restart it to report activity)" : ""
+                line("\(mark)[\(a.state.label)] \(s.modelName) · \(TouchBarController.shortName(s)): context \(ctx)\(hint)")
             }
         }
         menu.addItem(.separator())

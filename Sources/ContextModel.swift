@@ -16,6 +16,8 @@ struct SessionStatus {
     let sevenDayPercent: Double?
     let sevenDayResetsAt: Date?
     let updatedAt: Date
+    /// Subagent transcripts report through the same status line; they are not terminals the user can switch to.
+    let isSubagent: Bool
 
     var shortCwd: String {
         guard let c = cwd else { return "" }
@@ -56,7 +58,9 @@ final class StatusStore {
             if now.timeIntervalSince(mtime) > maxAge { continue }
             guard let data = try? Data(contentsOf: f),
                   let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
-            out.append(StatusStore.parse(obj, updatedAt: mtime, fallbackId: f.deletingPathExtension().lastPathComponent))
+            let parsed = StatusStore.parse(obj, updatedAt: mtime, fallbackId: f.deletingPathExtension().lastPathComponent)
+            if parsed.isSubagent { continue }   // subagents are not terminals the user switches between
+            out.append(parsed)
         }
         out.sort { $0.updatedAt > $1.updatedAt }
         let changed = !StatusStore.same(out, sessions)
@@ -99,7 +103,8 @@ final class StatusStore {
             fiveHourResetsAt: num((rl?["five_hour"] as? [String: Any])?["resets_at"]).map { Date(timeIntervalSince1970: $0) },
             sevenDayPercent: num((rl?["seven_day"] as? [String: Any])?["used_percentage"]),
             sevenDayResetsAt: num((rl?["seven_day"] as? [String: Any])?["resets_at"]).map { Date(timeIntervalSince1970: $0) },
-            updatedAt: updatedAt)
+            updatedAt: updatedAt,
+            isSubagent: o["agent"] != nil || o["agent_type"] != nil)
     }
 }
 

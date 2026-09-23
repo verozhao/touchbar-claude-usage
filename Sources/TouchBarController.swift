@@ -238,7 +238,7 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
             return
         }
         // A "working" turn that has not checked in for a while is probably an abandoned terminal.
-        let stalled = a.state == .working && now.timeIntervalSince(a.at) > 20 * 60
+        let stalled = (a.state == .working && now.timeIntervalSince(a.at) > 20 * 60) || a.state == .unknown
         var tip = stalled ? "Working?" : a.state.label
         if !a.shortCwd.isEmpty { tip += " · " + a.shortCwd }
         if extra > 0 { tip += " (+\(extra) more · tap to switch)" }
