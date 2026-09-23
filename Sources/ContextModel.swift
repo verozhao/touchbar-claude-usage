@@ -16,8 +16,10 @@ struct SessionStatus {
     let sevenDayPercent: Double?
     let sevenDayResetsAt: Date?
     let updatedAt: Date
-    /// Subagent transcripts report through the same status line; they are not terminals the user can switch to.
-    let isSubagent: Bool
+    /// True for status files that never did any work: the short-lived agent bootstraps Claude Code
+    /// writes alongside a real session. (`agent_type` alone is no good: a real interactive session
+    /// running as an agent carries it too.)
+    var isNoise: Bool { contextUsedPercent == nil && (costUSD ?? 0) == 0 }
 
     var shortCwd: String {
         guard let c = cwd else { return "" }
@@ -59,7 +61,7 @@ final class StatusStore {
             guard let data = try? Data(contentsOf: f),
                   let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
             let parsed = StatusStore.parse(obj, updatedAt: mtime, fallbackId: f.deletingPathExtension().lastPathComponent)
-            if parsed.isSubagent { continue }   // subagents are not terminals the user switches between
+            if parsed.isNoise { continue }   // never-used agent bootstrap, not a terminal
             out.append(parsed)
         }
         out.sort { $0.updatedAt > $1.updatedAt }
@@ -103,8 +105,7 @@ final class StatusStore {
             fiveHourResetsAt: num((rl?["five_hour"] as? [String: Any])?["resets_at"]).map { Date(timeIntervalSince1970: $0) },
             sevenDayPercent: num((rl?["seven_day"] as? [String: Any])?["used_percentage"]),
             sevenDayResetsAt: num((rl?["seven_day"] as? [String: Any])?["resets_at"]).map { Date(timeIntervalSince1970: $0) },
-            updatedAt: updatedAt,
-            isSubagent: o["agent"] != nil || o["agent_type"] != nil)
+            updatedAt: updatedAt)
     }
 }
 

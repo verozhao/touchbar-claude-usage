@@ -26,25 +26,37 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
     /// One entry per live session in the picker popover.
     struct SessionChoice { let id: String; let title: String; let color: NSColor; let selected: Bool }
     private var choices: [SessionChoice] = []
-    private lazy var sessionBar: NSTouchBar = {
-        let b = NSTouchBar()
-        b.delegate = self
-        return b
-    }()
+    private var picking = false
     private static let choicePrefix = ID.prefix + "choice."
     private static let autoId = NSTouchBarItem.Identifier(ID.prefix + "choice.auto")
 
     /// Rebuilds the popover's buttons: one per session, plus "Auto" to go back to following
     /// whichever session needs the user most.
     func setSessions(_ list: [SessionChoice]) {
-        guard list.map({ "\($0.id)\($0.selected)\($0.title)" }) != choices.map({ "\($0.id)\($0.selected)\($0.title)" }) else { return }
+        let key = { (c: [SessionChoice]) in c.map { "\($0.id)|\($0.selected)|\($0.title)" }.joined() }
+        guard key(list) != key(choices) else { return }
         choices = list
-        var ids = list.enumerated().map { NSTouchBarItem.Identifier(TouchBarController.choicePrefix + "\($0.offset)") }
-        if !list.isEmpty { ids.append(TouchBarController.autoId) }
-        // Drop cached items so each button is rebuilt with the current title.
-        sessionBar.templateItems = []
-        sessionBar.defaultItemIdentifiers = []
-        sessionBar.defaultItemIdentifiers = ids
+        if picking { showPicker() }   // keep an open picker in step with the sessions
+    }
+
+    /// The picker replaces the gauges for as long as it is open: a system-modal Touch Bar
+    /// cannot show an NSPopoverTouchBarItem, so we swap this bar's own layout instead.
+    private func showPicker() {
+        var ids: [NSTouchBarItem.Identifier] = [ID.activity]
+        for (i, _) in choices.enumerated().prefix(5) {
+            ids.append(NSTouchBarItem.Identifier(TouchBarController.choicePrefix + "\(i)"))
+        }
+        ids.append(TouchBarController.autoId)
+        picking = true
+        // Rebuild every button: titles and colours change between openings.
+        touchBar.templateItems = []
+        touchBar.defaultItemIdentifiers = ids
+    }
+
+    private func closePicker() {
+        picking = false
+        touchBar.defaultItemIdentifiers = pendingLayout ? promptLayout : idleLayout
+        applyPriorities(prompt: pendingLayout)
     }
 
     private let gaugeWidth: CGFloat = 140
@@ -52,7 +64,7 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
     private lazy var gWeek = GaugeView(title: "Week", width: gaugeWidth)
     private lazy var gModel = GaugeView(title: "Model", width: gaugeWidth)
     private lazy var gCtx = GaugeView(title: "Context", width: gaugeWidth)
-    private lazy var activity = ActivityView()
+    private lazy var activity = ActivityView(target: self, action: #selector(activityTapped))
     private lazy var info = InfoView(width: 340)
     private lazy var brand: NSTextField = {
         let l = NSTextField(labelWithString: "Claude")
@@ -151,14 +163,7 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
         case ID.week: item.view = gWeek; item.visibilityPriority = .low
         case ID.model: item.view = gModel; item.visibilityPriority = .normal
         case ID.context: item.view = gCtx; item.visibilityPriority = .high
-        case ID.activity:
-            // Touching the dot opens a list of the live sessions to pick from.
-            let pop = NSPopoverTouchBarItem(identifier: identifier)
-            pop.collapsedRepresentation = activity
-            pop.showsCloseButton = true
-            pop.popoverTouchBar = sessionBar
-            pop.visibilityPriority = .high
-            return pop
+        case ID.activity: item.view = activity; item.visibilityPriority = .high
         case ID.info: item.view = info; item.visibilityPriority = .high
         case ID.approve: item.view = approveButton; item.visibilityPriority = .high
         case ID.deny: item.view = denyButton; item.visibilityPriority = .high
@@ -271,7 +276,8 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
         }
 
         let wantPrompt = request != nil
-        if wantPrompt != pendingLayout {
+        if wantPrompt && picking { closePicker() }   // a permission prompt outranks the picker
+        if wantPrompt != pendingLayout && !picking {
             pendingLayout = wantPrompt
             touchBar.defaultItemIdentifiers = wantPrompt ? promptLayout : idleLayout
             applyPriorities(prompt: wantPrompt)
@@ -430,9 +436,15 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
     @objc private func denyTapped() { if let id = displayedRequestId { onDecision?(id, .deny) } }
     @objc private func passTapped() { if let id = displayedRequestId { onDecision?(id, .pass) } }
     @objc private func trayTapped() { onTrayTap?() }
+    @objc private func activityTapped() {
+        NSLog("activity dot tapped (%d sessions)", choices.count)
+        if picking { closePicker() } else if !choices.isEmpty { showPicker() }
+    }
+
     @objc private func sessionPicked(_ sender: NSButton) {
         let id = sender.identifier?.rawValue
+        NSLog("session picked: %@", id ?? "auto")
+        closePicker()
         onSelectSession?(id == "auto" ? nil : id)
-        if let item = touchBar.item(forIdentifier: ID.activity) as? NSPopoverTouchBarItem { item.dismissPopover(sender) }
     }
 }

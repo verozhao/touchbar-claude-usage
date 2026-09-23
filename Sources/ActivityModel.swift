@@ -105,26 +105,33 @@ final class ActivityStore {
 }
 
 /// Touch Bar tile: a coloured dot (plus a session count when more than one is live).
-final class ActivityView: NSView {
+/// An NSButton subclass rather than a plain view: inside a system-modal Touch Bar only real
+/// controls reliably receive touches.
+final class ActivityView: NSButton {
     private let dotSize: CGFloat = 10
     private let inset: CGFloat = 9
     private var text: String = ""
     private var dot: NSColor? = nil
     private var hollow = false
 
-    init() {
+    init(target: AnyObject?, action: Selector) {
         super.init(frame: NSRect(x: 0, y: 0, width: 28, height: 30))
+        self.target = target
+        self.action = action
+        self.title = ""
+        isBordered = false
+        bezelStyle = .rounded
         wantsLayer = true
         layer?.cornerRadius = 6
+        setButtonType(.momentaryChange)
     }
     required init?(coder: NSCoder) { fatalError() }
 
-
-    private var font: NSFont { NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold) }
+    private var badgeFont: NSFont { NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold) }
 
     override var intrinsicContentSize: NSSize {
         var w = inset * 2 + dotSize
-        if !text.isEmpty { w += 4 + ceil((text as NSString).size(withAttributes: [.font: font]).width) }
+        if !text.isEmpty { w += 4 + ceil((text as NSString).size(withAttributes: [.font: badgeFont]).width) }
         return NSSize(width: w, height: 30)
     }
 
@@ -138,7 +145,7 @@ final class ActivityView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        NSColor(white: 1, alpha: 0.08).setFill()
+        NSColor(white: 1, alpha: isHighlighted ? 0.25 : 0.08).setFill()
         NSBezierPath(roundedRect: bounds, xRadius: 6, yRadius: 6).fill()
         var x = inset
         let d = dot ?? NSColor(white: 1, alpha: 0.35)
@@ -150,7 +157,7 @@ final class ActivityView: NSView {
         }
         x += dotSize + 4
         guard !text.isEmpty else { return }
-        let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor(white: 1, alpha: 0.85)]
+        let attrs: [NSAttributedString.Key: Any] = [.font: badgeFont, .foregroundColor: NSColor(white: 1, alpha: 0.85)]
         let s = text as NSString
         s.draw(at: NSPoint(x: x, y: (bounds.height - s.size(withAttributes: attrs).height) / 2), withAttributes: attrs)
     }
