@@ -42,12 +42,40 @@ final class UsageFetcher {
     private var inFlight = false
     private var lastSuccessAt: Date?
     private var backoff: TimeInterval = 0
+    /// Last good response, kept on disk so a restart during a rate-limit still shows real numbers
+    /// (the model-scoped weekly limit has no status-line fallback).
+    private let cacheURL: URL
 
     init() {
+        let dir = ProcessInfo.processInfo.environment["CLAUDE_TOUCHBAR_DIR"].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) }
+            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".claude/touchbar")
+        cacheURL = dir.appendingPathComponent("usage-cache.json")
         let cfg = URLSessionConfiguration.ephemeral
         cfg.timeoutIntervalForRequest = 15
         cfg.timeoutIntervalForResource = 20
         session = URLSession(configuration: cfg)
+        loadCache()
+    }
+
+    private func loadCache() {
+        guard let data = try? Data(contentsOf: cacheURL),
+              let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let payload = o["payload"] as? [String: Any],
+              let ts = UsageFetcher.number(o["at"]) else { return }
+        let at = Date(timeIntervalSince1970: ts)
+        // A week-old cache is worse than nothing: the weekly windows have rolled over by then.
+        guard Date().timeIntervalSince(at) < 6 * 86400 else { return }
+        let limits = UsageFetcher.parse(payload)
+        guard !limits.isEmpty else { return }
+        lastSuccessAt = at
+        lastSnapshot = UsageSnapshot(limits: limits, fetchedAt: at, error: nil, lastSuccessAt: at, retryAfter: nil)
+    }
+
+    private func saveCache(_ payload: [String: Any]) {
+        let wrapper: [String: Any] = ["at": Date().timeIntervalSince1970, "payload": payload]
+        guard let data = try? JSONSerialization.data(withJSONObject: wrapper) else { return }
+        try? data.write(to: cacheURL, options: .atomic)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: cacheURL.path)
     }
 
     func fetch(completion: @escaping (UsageSnapshot) -> Void) {
@@ -91,6 +119,7 @@ final class UsageFetcher {
             guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return failure("bad JSON") }
             backoff = 0
             lastSuccessAt = Date()
+            saveCache(obj)
             return UsageSnapshot(limits: UsageFetcher.parse(obj), fetchedAt: Date(), error: nil, lastSuccessAt: lastSuccessAt, retryAfter: nil)
         case 401:
             return failure("token expired (run claude to refresh)")
@@ -180,6 +209,11 @@ enum ResetFormat {
         if total < 3600 { return "\(max(1, total / 60))m" }
         if total < 24 * 3600 { return "\(total / 3600)h \((total % 3600) / 60)m" }
         return "\(total / 86400)d \((total % 86400) / 3600)h"
+    }
+
+    /// "12m", "3h 5m" since a past moment.
+    static func elapsed(since: Date, now: Date = Date()) -> String {
+        short(now.addingTimeInterval(max(0, now.timeIntervalSince(since))), now: now)
     }
 
     /// "Mon 12:00 PM" style, for menus.

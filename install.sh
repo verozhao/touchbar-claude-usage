@@ -13,11 +13,11 @@ AGENT="$HOME/Library/LaunchAgents/$LABEL.plist"
 ./build.sh
 
 umask 077
-mkdir -p "$HOME/Applications" "$DATA/bin" "$DATA/requests" "$DATA/responses" "$DATA/status" "$HOME/Library/LaunchAgents"
-chmod 700 "$DATA" "$DATA/requests" "$DATA/responses" "$DATA/status"
+mkdir -p "$HOME/Applications" "$DATA/bin" "$DATA/requests" "$DATA/responses" "$DATA/status" "$DATA/activity" "$HOME/Library/LaunchAgents"
+chmod 700 "$DATA" "$DATA/requests" "$DATA/responses" "$DATA/status" "$DATA/activity"
 chmod 600 "$DATA"/*.json "$DATA"/statusline-passthrough 2>/dev/null || true
 # Scripts live in the data dir so the clone can move or go away without breaking Claude Code.
-cp scripts/claude-touchbar-permission-hook.sh scripts/claude-touchbar-statusline.sh scripts/claude-touchbar-session-end.sh "$DATA/bin/"
+cp scripts/claude-touchbar-permission-hook.sh scripts/claude-touchbar-statusline.sh scripts/claude-touchbar-session-end.sh scripts/claude-touchbar-activity-hook.sh "$DATA/bin/"
 chmod 700 "$DATA/bin"/*.sh
 
 # Stop a running copy before replacing the binary.
@@ -50,6 +50,7 @@ except Exception:
 timeout = wait + 30
 hook_cmd = f"CLAUDE_TOUCHBAR_HOOK_TIMEOUT={timeout} bash {shlex.quote(os.path.join(data, 'bin', 'claude-touchbar-permission-hook.sh'))}"
 end_cmd = f"bash {shlex.quote(os.path.join(data, 'bin', 'claude-touchbar-session-end.sh'))}"
+act = shlex.quote(os.path.join(data, "bin", "claude-touchbar-activity-hook.sh"))
 wrap_cmd = f"bash {shlex.quote(os.path.join(data, 'bin', 'claude-touchbar-statusline.sh'))}"
 s = {}
 mode = 0o600
@@ -73,6 +74,10 @@ upsert("PermissionRequest", "claude-touchbar-permission-hook", {
     "type": "command", "command": hook_cmd, "timeout": timeout,
     "statusMessage": f"Approve or deny on the Touch Bar (terminal prompt in {wait}s; Esc cancels the turn)"})
 upsert("SessionEnd", "claude-touchbar-session-end", {"type": "command", "command": end_cmd, "timeout": 10})
+# Activity: working / needs you / done, shown as a pill on the Touch Bar.
+for event, state in (("UserPromptSubmit", "working"), ("Notification", "waiting"), ("Stop", "done")):
+    upsert(event, "claude-touchbar-activity-hook",
+           {"type": "command", "command": f"bash {act} {state}", "timeout": 5})
 
 # Status line: remember the user's own command verbatim and run it after ours.
 sl = s.get("statusLine")

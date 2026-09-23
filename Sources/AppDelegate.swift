@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let usage = UsageFetcher()
     private lazy var status = StatusStore(dir: baseDir.appendingPathComponent("status"))
     private lazy var perms = PermissionQueue(baseDir: baseDir)
+    private lazy var activity = ActivityStore(dir: baseDir.appendingPathComponent("activity"))
     private let bar = TouchBarController()
     private var statusItem: NSStatusItem?
     private var usageTimer: Timer?
@@ -26,16 +27,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var lastRequestId: String?
     private var displayedSessionId: String?
     private var displayedSessionSince = Date.distantPast
+    private var lastActivityKey: String?
+    private var pinnedSessionId: String?   // set by tapping the activity dot
 
     // MARK: lifecycle
 
     func applicationDidFinishLaunching(_ note: Notification) {
         let fm = FileManager.default
         let priv: [FileAttributeKey: Any] = [.posixPermissions: 0o700]
-        for sub in ["", "requests", "responses", "status"] {
+        for sub in ["", "requests", "responses", "status", "activity"] {
             try? fm.createDirectory(at: baseDir.appendingPathComponent(sub), withIntermediateDirectories: true, attributes: priv)
         }
-        for sub in ["", "requests", "responses", "status"] { try? fm.setAttributes(priv, ofItemAtPath: baseDir.appendingPathComponent(sub).path) }
+        for sub in ["", "requests", "responses", "status", "activity"] { try? fm.setAttributes(priv, ofItemAtPath: baseDir.appendingPathComponent(sub).path) }
         if !fm.fileExists(atPath: configURL.path) { config.save(to: configURL) }
         config = Config.load(from: configURL)
         let env = ProcessInfo.processInfo.environment
@@ -51,15 +54,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if config.showMenuBar { setupStatusItem() }
         bar.keepControlStrip = config.keepControlStrip
         bar.onDecision = { [weak self] id, decision in self?.answer(id, decision) }
+        bar.onActivityTap = { [weak self] in self?.cycleSession() }
         bar.onTrayTap = { [weak self] in
             guard let self = self else { return }
             if self.bar.isPresented { self.hideBar(byUser: true) } else { self.showBar() }
         }
 
         status.onChange = { [weak self] in self?.render() }
+        activity.onChange = { [weak self] in self?.activityChanged() }
         perms.onChange = { [weak self] in self?.requestsChanged() }
         status.start()
         perms.start()
+        activity.start()
 
         if let snap = env["CLAUDE_TOUCHBAR_SNAPSHOT"] {
             // Dev aid: render the bar offscreen (idle or prompt layout) and exit. Never touches the real Touch Bar.
@@ -68,7 +74,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                     summary: "git push origin main --force-with-lease", description: nil) : nil
             usage.fetch { [weak self] snap0 in
                 guard let self = self else { return }
-                self.bar.update(usage: snap0, session: self.status.current, request: fakeReq)
+                let fakeAct = ActivityState(rawValue: env["CLAUDE_TOUCHBAR_SNAPSHOT_ACTIVITY"] ?? "")
+                    .map { SessionActivity(sessionId: "snap", state: $0, cwd: FileManager.default.currentDirectoryPath, message: nil, at: Date()) }
+                self.bar.update(usage: snap0, session: self.status.current, request: fakeReq, act: fakeAct ?? self.activity.current)
                 self.bar.writeSnapshot(to: snap, width: CGFloat(Double(env["CLAUDE_TOUCHBAR_SNAPSHOT_WIDTH"] ?? "") ?? 1004))
                 NSApp.terminate(nil)
             }
@@ -172,6 +180,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// active one, with 5 s of hysteresis so two busy sessions do not make the gauge flicker.
     private func sessionToShow() -> SessionStatus? {
         let sessions = status.sessions
+        if let pin = pinnedSessionId, let s = sessions.first(where: { $0.sessionId == pin }) { return s }
         if let sid = perms.first?.sessionId, let s = sessions.first(where: { $0.sessionId == sid }) {
             displayedSessionId = sid; displayedSessionSince = Date(); return s
         }
@@ -184,9 +193,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return newest
     }
 
+    /// Tapping the dot walks through the live sessions (most recent first), then back to "follow
+    /// whichever session is most interesting", so two terminals can share one bar.
+    private func cycleSession() {
+        let ids = status.sessions.map { $0.sessionId }
+        guard ids.count > 1 else { pinnedSessionId = nil; render(); return }
+        if let cur = pinnedSessionId, let i = ids.firstIndex(of: cur) {
+            pinnedSessionId = i + 1 < ids.count ? ids[i + 1] : nil
+        } else {
+            pinnedSessionId = ids.first
+        }
+        NSLog("following session %@", pinnedSessionId ?? "auto")
+        render()
+    }
+
     private func render() {
-        bar.update(usage: usage.lastSnapshot, session: sessionToShow(), request: perms.first, queued: perms.pending.count)
+        if let pin = pinnedSessionId, !status.sessions.contains(where: { $0.sessionId == pin }) { pinnedSessionId = nil }
+        let shown = sessionToShow()
+        let act = pinnedSessionId != nil
+            ? activity.sessions.first(where: { $0.sessionId == shown?.sessionId }) ?? activity.current
+            : activity.current
+        let extra = max(0, activity.sessions.count - 1)
+        // While a session is pinned the dot shows its place in the list (2/3) instead of a count.
+        var badge: String? = nil
+        if let pin = pinnedSessionId, let i = status.sessions.firstIndex(where: { $0.sessionId == pin }) {
+            badge = "\(i + 1)/\(status.sessions.count)"
+        }
+        bar.update(usage: usage.lastSnapshot, session: shown, request: perms.first,
+                   queued: perms.pending.count, act: act, actExtra: extra, actBadge: badge)
         updateStatusItem()
+    }
+
+    /// A session changed state. Surface the bar (and chime) when it starts needing the user,
+    /// so an answer waiting in a background terminal does not go unnoticed.
+    private func activityChanged() {
+        render()
+        guard let a = activity.current else { lastActivityKey = nil; return }
+        let key = "\(a.sessionId):\(a.state.rawValue)"
+        defer { lastActivityKey = key }
+        guard key != lastActivityKey, a.state != .working else { return }
+        if config.sound { NSSound(named: a.state == .waiting ? "Pop" : "Tink")?.play() }
+        if !userHid || a.state == .waiting { bar.present() }
     }
 
     private func requestsChanged() {
@@ -277,13 +324,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if s.isStale { parts.insert("!", at: 0) }
         }
         if let c = sessionToShow()?.contextUsedPercent { parts.append("ctx \(Int(c.rounded()))%") }
+        if let a = activity.current { parts.insert(a.state == .waiting ? "◆" : a.state == .done ? "✓" : "●", at: 0) }
         if perms.first != nil { parts.insert("⚠︎", at: 0) }
         b.title = parts.isEmpty ? "C" : parts.joined(separator: "  ")
     }
 
     @objc private func menuShow() { showBar() }
     @objc private func menuHide() { hideBar(byUser: true) }
-    @objc private func menuRefresh() { refreshUsage(); status.reload(); perms.reload() }
+    @objc private func menuRefresh() { refreshUsage(); status.reload(); perms.reload(); activity.reload() }
     @objc private func menuOpenFolder() { NSWorkspace.shared.open(baseDir) }
     @objc private func menuOpenUsage() { NSWorkspace.shared.open(URL(string: "https://claude.ai/settings/usage")!) }
     @objc private func menuToggleControlStrip() {
@@ -346,7 +394,9 @@ extension AppDelegate: NSMenuDelegate {
             for s in status.sessions.prefix(6) {
                 let ctx = s.contextUsedPercent.map { "\(Int($0.rounded()))%" } ?? "–"
                 let name = s.sessionName ?? s.shortCwd
-                line("\(s.modelName) · \(name): context \(ctx)")
+                let act = activity.sessions.first(where: { $0.sessionId == s.sessionId })
+                let state = act.map { "[\($0.state.label)] " } ?? ""
+                line("\(state)\(s.modelName) · \(name): context \(ctx)")
             }
         }
         menu.addItem(.separator())
