@@ -4,7 +4,6 @@ import AppKit
 final class TouchBarController: NSObject, NSTouchBarDelegate {
     enum ID {
         static let prefix = "com.verozhao.claude-touchbar."
-        static let brand = NSTouchBarItem.Identifier(prefix + "brand")
         static let week = NSTouchBarItem.Identifier(prefix + "week")
         static let model = NSTouchBarItem.Identifier(prefix + "model")
         static let context = NSTouchBarItem.Identifier(prefix + "context")
@@ -27,12 +26,6 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
     private lazy var gCtx = GaugeView(title: "Context", width: gaugeWidth)
     private lazy var activity = ActivityView()
     private lazy var info = InfoView(width: 340)
-    private lazy var brand: NSTextField = {
-        let l = NSTextField(labelWithString: "Claude")
-        l.font = NSFont.systemFont(ofSize: 12, weight: .bold)
-        l.textColor = NSColor(srgbRed: 0.85, green: 0.55, blue: 0.35, alpha: 1)
-        return l
-    }()
     private lazy var approveButton = makeButton("Approve", color: NSColor(srgbRed: 0.20, green: 0.62, blue: 0.30, alpha: 1), action: #selector(approveTapped), width: 96)
     private lazy var denyButton = makeButton("Deny", color: NSColor(srgbRed: 0.75, green: 0.22, blue: 0.20, alpha: 1), action: #selector(denyTapped), width: 76)
     private lazy var terminalButton = makeButton("Terminal", color: nil, action: #selector(passTapped), width: 84)
@@ -60,10 +53,10 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
     var showActivity = true { didSet { if showActivity != oldValue { relayout() } } }
 
     private var idleLayout: [NSTouchBarItem.Identifier] {
-        showActivity ? [ID.brand, ID.activity, ID.week, ID.model, ID.context] : [ID.brand, ID.week, ID.model, ID.context]
+[ID.week, ID.model, ID.context] + (showActivity ? [ID.activity] : [])
     }
     private var promptLayout: [NSTouchBarItem.Identifier] {
-        (showActivity ? [ID.activity] : []) + [ID.week, ID.model, ID.context, .flexibleSpace, ID.info, ID.approve, ID.deny, ID.terminal]
+        [ID.week, ID.model, ID.context] + (showActivity ? [ID.activity] : []) + [.flexibleSpace, ID.info, ID.approve, ID.deny, ID.terminal]
     }
     /// Which items NSTouchBar would keep at `width` points, honouring visibilityPriority (used by the snapshot only).
     private func fitted(_ ids: [NSTouchBarItem.Identifier], width: CGFloat, spacing: CGFloat) -> [NSTouchBarItem.Identifier] {
@@ -108,10 +101,10 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
     private func priorities(prompt: Bool) -> [NSTouchBarItem.Identifier: NSTouchBarItem.Priority] {
         func P(_ v: Float) -> NSTouchBarItem.Priority { NSTouchBarItem.Priority(rawValue: v) }
         if prompt {
-            return [ID.brand: P(-1000), ID.model: P(-950), ID.week: P(-900), ID.context: P(-500), ID.activity: P(-300),
+            return [ID.model: P(-950), ID.week: P(-900), ID.context: P(-500), ID.activity: P(-300),
                     ID.terminal: P(0), ID.info: P(1000), ID.approve: P(1000), ID.deny: P(1000)]
         }
-        return [ID.brand: P(-1000), ID.model: P(-800), ID.week: P(0), ID.context: P(0), ID.activity: P(900), ID.info: P(500)]
+        return [ID.model: P(-800), ID.week: P(0), ID.context: P(0), ID.activity: P(900), ID.info: P(500)]
     }
 
     // MARK: NSTouchBarDelegate
@@ -119,7 +112,6 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
     func touchBar(_ touchBar: NSTouchBar, makeItemForIdentifier identifier: NSTouchBarItem.Identifier) -> NSTouchBarItem? {
         let item = NSCustomTouchBarItem(identifier: identifier)
         switch identifier {
-        case ID.brand: item.view = brand; item.visibilityPriority = .low
         case ID.week: item.view = gWeek; item.visibilityPriority = .low
         case ID.model: item.view = gModel; item.visibilityPriority = .normal
         case ID.context: item.view = gCtx; item.visibilityPriority = .high
@@ -303,7 +295,6 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
 
     private func view(for id: NSTouchBarItem.Identifier) -> NSView? {
         switch id {
-        case ID.brand: return brand
         case ID.week: return gWeek
         case ID.model: return gModel
         case ID.context: return gCtx
