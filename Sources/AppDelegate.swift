@@ -57,9 +57,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         bar.onDecision = { [weak self] id, decision in self?.answer(id, decision) }
         bar.onDotPick { [weak self] id in
             guard let self = self else { return }
-            self.pinnedSessionId = (self.pinnedSessionId == id) ? nil : id
-            NSLog("following session %@", self.pinnedSessionId ?? "auto")
+            self.pinnedSessionId = id
+            NSLog("following session %@", id)
             self.render()
+            self.reveal(id)
         }
         bar.onTrayTap = { [weak self] in
             guard let self = self else { return }
@@ -83,7 +84,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let fakeState = ActivityState(rawValue: env["CLAUDE_TOUCHBAR_SNAPSHOT_ACTIVITY"] ?? "") ?? .working
                 let fakeDots = (1...max(1, Int(env["CLAUDE_TOUCHBAR_SNAPSHOT_DOTS"] ?? "1") ?? 1)).map { i in
                     ActivityView.Dot(id: "snap\(i)", color: fakeState.color, hollow: fakeState == .unknown,
-                                     selected: i == 1, tip: "preview", symbol: fakeState.symbol)
+                                     selected: i == 1, tip: "preview", symbol: fakeState.symbol,
+                                     label: ["touchbar", "cfi", "graphrag"][(i - 1) % 3])
                 }
                 self.bar.update(usage: snap0, session: self.status.current, request: fakeReq, dots: fakeDots)
                 self.bar.writeSnapshot(to: snap, width: CGFloat(Double(env["CLAUDE_TOUCHBAR_SNAPSHOT_WIDTH"] ?? "") ?? 1004))
@@ -235,6 +237,67 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return nil   // rate-limited usage endpoint, HTTP hiccups: our numbers age, Claude Code is fine
     }
 
+    /// Bring the terminal this session is typed in to the front, and its own tab with it.
+    /// Falls back to activating the app when we do not know the tty (sessions that started
+    /// before the hook recorded one).
+    private func reveal(_ sessionId: String) {
+        guard let a = activity.sessions.first(where: { $0.sessionId == sessionId }) else { return }
+        guard let app = a.app, !app.isEmpty else { NSLog("reveal %@: no terminal recorded", sessionId); return }
+        let script: String
+        switch app {
+        case "Terminal":
+            guard let tty = a.tty else { script = "tell application \"Terminal\" to activate"; break }
+            script = """
+            tell application "Terminal"
+                activate
+                repeat with w in windows
+                    repeat with t in tabs of w
+                        if tty of t is "\(tty)" then
+                            set selected of t to true
+                            set frontmost of w to true
+                            return
+                        end if
+                    end repeat
+                end repeat
+            end tell
+            """
+        case "iTerm2", "iTerm":
+            guard let tty = a.tty else { script = "tell application \"iTerm\" to activate"; break }
+            script = """
+            tell application "iTerm"
+                activate
+                repeat with w in windows
+                    repeat with t in tabs of w
+                        repeat with s in sessions of t
+                            if tty of s is "\(tty)" then
+                                select w
+                                select t
+                                select s
+                                return
+                            end if
+                        end repeat
+                    end repeat
+                end repeat
+            end tell
+            """
+        default:
+            script = "tell application \"\(app)\" to activate"
+        }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            p.arguments = ["-e", script]
+            let err = Pipe()
+            p.standardError = err
+            do { try p.run() } catch { NSLog("reveal failed to start: %@", error.localizedDescription); return }
+            p.waitUntilExit()
+            if p.terminationStatus != 0 {
+                let msg = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+                NSLog("reveal %@ failed: %@", app, msg.trimmingCharacters(in: .whitespacesAndNewlines))
+            }
+        }
+    }
+
     private func render() {
         let live = tracked()
         if let pin = pinnedSessionId, !live.contains(where: { $0.session.sessionId == pin }) { pinnedSessionId = nil }
@@ -249,7 +312,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if let p = problem { tip = p }
             return ActivityView.Dot(id: entry.session.sessionId, color: state.color,
                                     hollow: state == .unknown, selected: entry.session.sessionId == shown?.sessionId,
-                                    tip: tip, symbol: state.symbol)
+                                    tip: tip, symbol: state.symbol,
+                                    label: TouchBarController.firstWord(entry.session))
         }
         bar.update(usage: usage.lastSnapshot, session: shown, request: perms.first,
                    queued: perms.pending.count, dots: dots)

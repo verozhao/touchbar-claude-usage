@@ -32,6 +32,24 @@ if [[ $input =~ \"message\"[[:space:]]*:[[:space:]]*\"([^\"]*)\" ]]; then msg=${
 msg=${msg//\\/}
 msg=$(printf '%s' "$msg" | tr -d '"' | cut -c1-120)
 
+# Which terminal this session lives in, so touching its dot can bring the window forward.
+# Walk up from the hook to the first process running out of an .app bundle.
+tty_dev=$(ps -o tty= -p $PPID 2>/dev/null | tr -d ' ')
+if [ -n "$tty_dev" ] && [ "$tty_dev" != "??" ]; then tty_dev="/dev/$tty_dev"; else tty_dev=""; fi
+app=""
+pid=$PPID
+for _ in 1 2 3 4 5 6 7 8; do
+  line=$(ps -o ppid=,comm= -p "$pid" 2>/dev/null)
+  [ -z "$line" ] && break
+  parent=$(echo "$line" | awk '{print $1}')
+  comm=$(echo "$line" | cut -d' ' -f2-)
+  case $comm in
+    */*.app/Contents/MacOS/*) app=${comm##*/}; break ;;
+  esac
+  { [ -z "$parent" ] || [ "$parent" = "1" ]; } && break
+  pid=$parent
+done
+
 COUNT="$ACT_DIR/$sid.agents"
 
 # Subagents outlive the turn that started them: Stop fires while they are still working, and the
@@ -69,8 +87,8 @@ if [ "$STATE" = "waiting" ] && [ -f "$ACT_DIR/$sid.json" ]; then
 fi
 
 tmp="$ACT_DIR/.$sid.tmp"
-if printf '{"session_id":"%s","state":"%s","cwd":"%s","message":"%s","agents":%s,"ts":%s}\n' \
-    "$sid" "$STATE" "$cwd" "$msg" "$(read_count)" "$(date +%s)" > "$tmp" 2>/dev/null; then
+if printf '{"session_id":"%s","state":"%s","cwd":"%s","message":"%s","agents":%s,"tty":"%s","app":"%s","ts":%s}\n' \
+    "$sid" "$STATE" "$cwd" "$msg" "$(read_count)" "$tty_dev" "$app" "$(date +%s)" > "$tmp" 2>/dev/null; then
   mv -f "$tmp" "$ACT_DIR/$sid.json" 2>/dev/null || rm -f "$tmp"
 fi
 exit 0

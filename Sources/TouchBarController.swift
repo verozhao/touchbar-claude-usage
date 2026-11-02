@@ -232,6 +232,16 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
 
     /// The session's name cut down to something that fits next to the model and the cost:
     /// its own name if it has one, otherwise the last path component of its directory.
+    /// The one word that tells two sessions apart on the bar: the first word of the session's
+    /// name (Claude Code builds it from the opening message), else its folder.
+    static func firstWord(_ s: SessionStatus, limit: Int = 9) -> String {
+        var w = (s.sessionName ?? "").split(separator: " ").first.map(String.init) ?? ""
+        if w.isEmpty { w = String(s.shortCwd.split(separator: "/").last ?? "") }
+        w = w.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+        if w.count > limit { w = String(w.prefix(limit - 1)) + "…" }
+        return w
+    }
+
     static func shortName(_ s: SessionStatus, limit: Int = 22) -> String {
         var name = s.sessionName ?? ""
         if name.isEmpty { name = String(s.shortCwd.split(separator: "/").last ?? "") }

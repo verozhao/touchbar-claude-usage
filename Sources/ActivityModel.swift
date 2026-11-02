@@ -56,6 +56,9 @@ struct SessionActivity {
     let message: String?
     let at: Date
     var agents: Int = 0
+    /// Where the session is typed: its tty and the terminal app, so its window can be raised.
+    var tty: String? = nil
+    var app: String? = nil
 
     var shortCwd: String {
         guard let c = cwd, !c.isEmpty else { return "" }
@@ -104,8 +107,11 @@ final class ActivityStore {
             if now.timeIntervalSince(at) > maxAge { continue }
             let msg = (o["message"] as? String).flatMap { $0.isEmpty ? nil : $0 }
             let agents = (o["agents"] as? Int) ?? Int((o["agents"] as? Double) ?? 0)
+            let tty = (o["tty"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            let app = (o["app"] as? String).flatMap { $0.isEmpty ? nil : $0 }
             out.append(SessionActivity(sessionId: (o["session_id"] as? String) ?? f.deletingPathExtension().lastPathComponent,
-                                       state: state, cwd: o["cwd"] as? String, message: msg, at: at, agents: agents))
+                                       state: state, cwd: o["cwd"] as? String, message: msg, at: at, agents: agents,
+                                       tty: tty, app: app))
         }
         out.sort { a, b in a.state.rank != b.state.rank ? a.state.rank < b.state.rank : a.at > b.at }
         let changed = !ActivityStore.same(out, sessions)
@@ -138,6 +144,8 @@ final class DotButton: NSButton {
     var color: NSColor = NSColor(white: 1, alpha: 0.35)
     var hollow = false
     var selected = false
+    /// A word next to the dot, so two sessions are told apart without hovering.
+    var label: String = "" { didSet { invalidateIntrinsicContentSize() } }
     /// An SF Symbol drawn in place of the dot (the raised hand for "needs you").
     var symbol: String? = nil
 
@@ -152,7 +160,13 @@ final class DotButton: NSButton {
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    override var intrinsicContentSize: NSSize { DotButton.size }
+    private static let labelFont = NSFont.systemFont(ofSize: 11, weight: .medium)
+
+    override var intrinsicContentSize: NSSize {
+        guard !label.isEmpty else { return DotButton.size }
+        let w = (label as NSString).size(withAttributes: [.font: DotButton.labelFont]).width
+        return NSSize(width: DotButton.size.width + 3 + ceil(w), height: DotButton.size.height)
+    }
 
     /// An SF Symbol recoloured into its own transparent image. Tinting in place would flood the
     /// tile, since the background behind the glyph is already opaque.
@@ -173,7 +187,15 @@ final class DotButton: NSButton {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        let c = NSRect(x: (bounds.width - dotSize) / 2, y: (bounds.height - dotSize) / 2, width: dotSize, height: dotSize)
+        let glyphBox = NSRect(x: 0, y: 0, width: DotButton.size.width, height: bounds.height)
+        let c = NSRect(x: glyphBox.midX - dotSize / 2, y: (bounds.height - dotSize) / 2, width: dotSize, height: dotSize)
+        if !label.isEmpty {
+            let attrs: [NSAttributedString.Key: Any] = [.font: DotButton.labelFont,
+                                                        .foregroundColor: NSColor(white: 1, alpha: selected ? 0.95 : 0.6)]
+            let t = label as NSString
+            t.draw(at: NSPoint(x: glyphBox.maxX + 3, y: (bounds.height - t.size(withAttributes: attrs).height) / 2),
+                   withAttributes: attrs)
+        }
         if isHighlighted {
             NSColor(white: 1, alpha: 0.25).setFill()
             NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 4), xRadius: 5, yRadius: 5).fill()
@@ -187,7 +209,7 @@ final class DotButton: NSButton {
         }
         if let sym = symbol.flatMap({ DotButton.tinted($0, color) }) {
             let size = sym.size
-            sym.draw(in: NSRect(x: (bounds.width - size.width) / 2, y: (bounds.height - size.height) / 2,
+            sym.draw(in: NSRect(x: glyphBox.midX - size.width / 2, y: (bounds.height - size.height) / 2,
                                 width: size.width, height: size.height))
             return
         }
@@ -210,10 +232,11 @@ final class ActivityView: NSView {
         let selected: Bool
         let tip: String
         var symbol: String? = nil
+        var label: String = ""
     }
 
     static let maxDots = 5
-    private let gap: CGFloat = 2
+    private let gap: CGFloat = 6
     private let inset: CGFloat = 6
     private var buttons: [DotButton] = []
     private var ids: [String] = []
@@ -228,8 +251,9 @@ final class ActivityView: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     override var intrinsicContentSize: NSSize {
-        let n = max(1, buttons.count)
-        return NSSize(width: inset * 2 + CGFloat(n) * DotButton.size.width + CGFloat(n - 1) * gap, height: 30)
+        guard !buttons.isEmpty else { return NSSize(width: inset * 2 + DotButton.size.width, height: 30) }
+        let dots = buttons.reduce(CGFloat(0)) { $0 + $1.intrinsicContentSize.width }
+        return NSSize(width: inset * 2 + dots + CGFloat(buttons.count - 1) * gap, height: 30)
     }
 
     func set(_ dots: [Dot]) {
@@ -241,7 +265,8 @@ final class ActivityView: NSView {
         }
         ids = shown.map { $0.id }
         for (b, d) in zip(buttons, shown) {
-            b.color = d.color; b.hollow = d.hollow; b.selected = d.selected; b.toolTip = d.tip; b.symbol = d.symbol
+            b.color = d.color; b.hollow = d.hollow; b.selected = d.selected; b.toolTip = d.tip
+            b.symbol = d.symbol; b.label = d.label
             b.needsDisplay = true
         }
         // An empty bar still shows one hollow dot, so the tile never collapses to nothing.
@@ -259,8 +284,9 @@ final class ActivityView: NSView {
         super.layout()
         var x = inset
         for b in buttons {
-            b.frame = NSRect(x: x, y: 0, width: DotButton.size.width, height: DotButton.size.height)
-            x += DotButton.size.width + gap
+            let w = b.intrinsicContentSize.width
+            b.frame = NSRect(x: x, y: 0, width: w, height: DotButton.size.height)
+            x += w + gap
         }
     }
 
