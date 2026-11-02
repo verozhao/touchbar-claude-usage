@@ -53,11 +53,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         if config.showMenuBar { setupStatusItem() }
         bar.keepControlStrip = config.keepControlStrip
+        bar.showActivity = config.showActivity
         bar.onDecision = { [weak self] id, decision in self?.answer(id, decision) }
-        bar.onSelectSession = { [weak self] id in
+        bar.onDotPick { [weak self] id in
             guard let self = self else { return }
-            self.pinnedSessionId = id
-            NSLog("following session %@", id ?? "auto")
+            self.pinnedSessionId = (self.pinnedSessionId == id) ? nil : id
+            NSLog("following session %@", self.pinnedSessionId ?? "auto")
             self.render()
         }
         bar.onTrayTap = { [weak self] in
@@ -79,10 +80,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                     summary: "git push origin main --force-with-lease", description: nil) : nil
             usage.fetch { [weak self] snap0 in
                 guard let self = self else { return }
-                let fakeAct = ActivityState(rawValue: env["CLAUDE_TOUCHBAR_SNAPSHOT_ACTIVITY"] ?? "")
-                    .map { SessionActivity(sessionId: "snap", state: $0, cwd: FileManager.default.currentDirectoryPath, message: nil, at: Date()) }
-                self.bar.update(usage: snap0, session: self.status.current, request: fakeReq,
-                                act: fakeAct ?? self.activity.current, alert: env["CLAUDE_TOUCHBAR_SNAPSHOT_ALERT"] ?? self.blockingProblem())
+                let fakeState = ActivityState(rawValue: env["CLAUDE_TOUCHBAR_SNAPSHOT_ACTIVITY"] ?? "") ?? .working
+                let fakeDots = (1...max(1, Int(env["CLAUDE_TOUCHBAR_SNAPSHOT_DOTS"] ?? "1") ?? 1)).map { i in
+                    ActivityView.Dot(id: "snap\(i)", color: fakeState.color, hollow: fakeState == .unknown,
+                                     selected: i == 1, tip: "preview")
+                }
+                self.bar.update(usage: snap0, session: self.status.current, request: fakeReq, dots: fakeDots)
                 self.bar.writeSnapshot(to: snap, width: CGFloat(Double(env["CLAUDE_TOUCHBAR_SNAPSHOT_WIDTH"] ?? "") ?? 1004))
                 NSApp.terminate(nil)
             }
@@ -238,22 +241,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let shown = sessionToShow()
         let act = live.first(where: { $0.session.sessionId == shown?.sessionId })?.act ?? live.first?.act
         let extra = max(0, live.count - 1)
-        // While a session is pinned the dot shows its place in the list (2/3) instead of a count.
-        var badge: String? = nil
-        if let pin = pinnedSessionId, let i = live.firstIndex(where: { $0.session.sessionId == pin }) {
-            badge = "\(i + 1)/\(live.count)"
+        let problem = blockingProblem()
+        let dots: [ActivityView.Dot] = live.map { entry in
+            let needsMe = perms.first?.sessionId == entry.session.sessionId
+            let state: ActivityState = problem != nil ? .error : (needsMe ? .waiting : entry.act.state)
+            var tip = state.label
+            if entry.act.agents > 0 { tip += " · \(entry.act.agents) background agent\(entry.act.agents == 1 ? "" : "s")" }
+            tip += " · " + TouchBarController.shortName(entry.session)
+            if let p = problem { tip = p }
+            return ActivityView.Dot(id: entry.session.sessionId, color: state.color,
+                                    hollow: state == .unknown, selected: entry.session.sessionId == shown?.sessionId,
+                                    tip: tip)
         }
-        bar.setSessions(live.map { entry in
-            let ctx = entry.session.contextUsedPercent.map { " · \(Int($0.rounded()))%" } ?? ""
-            return TouchBarController.SessionChoice(
-                id: entry.session.sessionId,
-                title: TouchBarController.shortName(entry.session, limit: 18) + ctx,
-                color: entry.act.state.color,
-                selected: entry.session.sessionId == pinnedSessionId)
-        })
         bar.update(usage: usage.lastSnapshot, session: shown, request: perms.first,
-                   queued: perms.pending.count, act: act, actExtra: extra, actBadge: badge,
-                   alert: blockingProblem())
+                   queued: perms.pending.count, dots: dots)
         updateStatusItem()
     }
 
@@ -371,7 +372,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func menuToggleControlStrip() {
         config.keepControlStrip.toggle(); config.save(to: configURL)
         bar.keepControlStrip = config.keepControlStrip
+        bar.showActivity = config.showActivity
         if bar.isPresented { bar.dismiss(); DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in self?.showBar() } }
+    }
+    @objc private func menuToggleActivity() {
+        config.showActivity.toggle(); config.save(to: configURL)
+        bar.showActivity = config.showActivity
+        render()
     }
     @objc private func menuToggleAutoPresent() { config.autoPresent.toggle(); config.save(to: configURL) }
     @objc private func menuToggleSound() { config.sound.toggle(); config.save(to: configURL) }
@@ -439,6 +446,7 @@ extension AppDelegate: NSMenuDelegate {
         menu.addItem(.separator())
         action(bar.isPresented ? "Hide Touch Bar" : "Show Touch Bar", bar.isPresented ? #selector(menuHide) : #selector(menuShow))
         action("Refresh Now", #selector(menuRefresh))
+        action("Show Session Dots", #selector(menuToggleActivity), state: config.showActivity)
         action("Keep Control Strip Visible", #selector(menuToggleControlStrip), state: config.keepControlStrip)
         action("Re-show When Switching Apps", #selector(menuToggleAutoPresent), state: config.autoPresent)
         action("Sound on Permission Prompt", #selector(menuToggleSound), state: config.sound)

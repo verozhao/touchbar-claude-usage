@@ -83,6 +83,7 @@ final class ActivityStore {
     func reload() {
         let fm = FileManager.default
         guard let files = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) else { return }
+        sweepOrphans(files)
         var out: [SessionActivity] = []
         let now = Date()
         for f in files where f.pathExtension == "json" {
@@ -103,6 +104,17 @@ final class ActivityStore {
         if changed { onChange?() }
     }
 
+    /// A session killed with its terminal never runs SessionEnd, so its .agents / .stopped
+    /// sidecars would pile up for ever. Drop anything a day old.
+    private func sweepOrphans(_ files: [URL]) {
+        let fm = FileManager.default
+        for f in files where f.pathExtension == "agents" || f.pathExtension == "stopped" {
+            guard let m = (try? f.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate,
+                  Date().timeIntervalSince(m) > 86400 else { continue }
+            try? fm.removeItem(at: f)
+        }
+    }
+
     private static func same(_ a: [SessionActivity], _ b: [SessionActivity]) -> Bool {
         guard a.count == b.count else { return false }
         for (x, y) in zip(a, b) where x.sessionId != y.sessionId || x.state != y.state || x.at != y.at { return false }
@@ -110,61 +122,113 @@ final class ActivityStore {
     }
 }
 
-/// Touch Bar tile: a coloured dot (plus a session count when more than one is live).
-/// An NSButton subclass rather than a plain view: inside a system-modal Touch Bar only real
-/// controls reliably receive touches.
-final class ActivityView: NSButton {
+/// One session: a coloured dot you can touch to follow that session.
+final class DotButton: NSButton {
+    static let size = NSSize(width: 18, height: 30)
     private let dotSize: CGFloat = 10
-    private let inset: CGFloat = 9
-    private var text: String = ""
-    private var dot: NSColor? = nil
-    private var hollow = false
+    var color: NSColor = NSColor(white: 1, alpha: 0.35)
+    var hollow = false
+    var selected = false
 
     init(target: AnyObject?, action: Selector) {
-        super.init(frame: NSRect(x: 0, y: 0, width: 28, height: 30))
+        super.init(frame: NSRect(origin: .zero, size: DotButton.size))
         self.target = target
         self.action = action
-        self.title = ""
+        title = ""
         isBordered = false
-        bezelStyle = .rounded
         wantsLayer = true
-        layer?.cornerRadius = 6
         setButtonType(.momentaryChange)
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    private var badgeFont: NSFont { NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold) }
+    override var intrinsicContentSize: NSSize { DotButton.size }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let c = NSRect(x: (bounds.width - dotSize) / 2, y: (bounds.height - dotSize) / 2, width: dotSize, height: dotSize)
+        if isHighlighted {
+            NSColor(white: 1, alpha: 0.25).setFill()
+            NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 4), xRadius: 5, yRadius: 5).fill()
+        }
+        // The session the gauges are following wears a ring.
+        if selected {
+            NSColor(white: 1, alpha: 0.9).setStroke()
+            let ring = NSBezierPath(ovalIn: c.insetBy(dx: -3.5, dy: -3.5))
+            ring.lineWidth = 1.5
+            ring.stroke()
+        }
+        let path = NSBezierPath(ovalIn: c)
+        if hollow {
+            color.setStroke(); path.lineWidth = 2; path.stroke()
+        } else {
+            color.setFill(); path.fill()
+        }
+    }
+}
+
+/// Touch Bar tile: one dot per live session, left to right, newest activity first.
+final class ActivityView: NSView {
+    /// What each dot needs to draw itself.
+    struct Dot { let id: String; let color: NSColor; let hollow: Bool; let selected: Bool; let tip: String }
+
+    static let maxDots = 5
+    private let gap: CGFloat = 2
+    private let inset: CGFloat = 6
+    private var buttons: [DotButton] = []
+    private var ids: [String] = []
+    var onPick: ((String) -> Void)?
+
+    override init(frame: NSRect) {
+        super.init(frame: NSRect(x: 0, y: 0, width: 30, height: 30))
+        wantsLayer = true
+        layer?.cornerRadius = 6
+    }
+    convenience init() { self.init(frame: .zero) }
+    required init?(coder: NSCoder) { fatalError() }
 
     override var intrinsicContentSize: NSSize {
-        var w = inset * 2 + dotSize
-        if !text.isEmpty { w += 4 + ceil((text as NSString).size(withAttributes: [.font: badgeFont]).width) }
-        return NSSize(width: w, height: 30)
+        let n = max(1, buttons.count)
+        return NSSize(width: inset * 2 + CGFloat(n) * DotButton.size.width + CGFloat(n - 1) * gap, height: 30)
     }
 
-    func set(state: ActivityState?, text: String, tip: String, hollow: Bool = false) {
-        self.text = text
-        self.dot = state?.color
-        self.hollow = hollow
-        toolTip = tip
+    func set(_ dots: [Dot]) {
+        let shown = Array(dots.prefix(ActivityView.maxDots))
+        if shown.count != buttons.count {
+            buttons.forEach { $0.removeFromSuperview() }
+            buttons = shown.map { _ in DotButton(target: self, action: #selector(dotTapped(_:))) }
+            buttons.forEach { addSubview($0) }
+        }
+        ids = shown.map { $0.id }
+        for (b, d) in zip(buttons, shown) {
+            b.color = d.color; b.hollow = d.hollow; b.selected = d.selected; b.toolTip = d.tip
+            b.needsDisplay = true
+        }
+        // An empty bar still shows one hollow dot, so the tile never collapses to nothing.
+        if shown.isEmpty && buttons.isEmpty {
+            let b = DotButton(target: self, action: #selector(dotTapped(_:)))
+            b.toolTip = "No Claude Code session running"
+            buttons = [b]; addSubview(b); ids = []
+        }
         invalidateIntrinsicContentSize()
+        layout()
         needsDisplay = true
     }
 
-    override func draw(_ dirtyRect: NSRect) {
-        NSColor(white: 1, alpha: isHighlighted ? 0.25 : 0.08).setFill()
-        NSBezierPath(roundedRect: bounds, xRadius: 6, yRadius: 6).fill()
+    override func layout() {
+        super.layout()
         var x = inset
-        let d = dot ?? NSColor(white: 1, alpha: 0.35)
-        let circle = NSBezierPath(ovalIn: NSRect(x: x, y: (bounds.height - dotSize) / 2, width: dotSize, height: dotSize))
-        if hollow || dot == nil {
-            d.setStroke(); circle.lineWidth = 2; circle.stroke()
-        } else {
-            d.setFill(); circle.fill()
+        for b in buttons {
+            b.frame = NSRect(x: x, y: 0, width: DotButton.size.width, height: DotButton.size.height)
+            x += DotButton.size.width + gap
         }
-        x += dotSize + 4
-        guard !text.isEmpty else { return }
-        let attrs: [NSAttributedString.Key: Any] = [.font: badgeFont, .foregroundColor: NSColor(white: 1, alpha: 0.85)]
-        let s = text as NSString
-        s.draw(at: NSPoint(x: x, y: (bounds.height - s.size(withAttributes: attrs).height) / 2), withAttributes: attrs)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor(white: 1, alpha: 0.08).setFill()
+        NSBezierPath(roundedRect: bounds, xRadius: 6, yRadius: 6).fill()
+    }
+
+    @objc private func dotTapped(_ sender: DotButton) {
+        guard let i = buttons.firstIndex(of: sender), i < ids.count else { return }
+        onPick?(ids[i])
     }
 }

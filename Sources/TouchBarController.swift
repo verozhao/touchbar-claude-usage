@@ -5,7 +5,6 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
     enum ID {
         static let prefix = "com.verozhao.claude-touchbar."
         static let brand = NSTouchBarItem.Identifier(prefix + "brand")
-        static let fiveHour = NSTouchBarItem.Identifier(prefix + "5h")
         static let week = NSTouchBarItem.Identifier(prefix + "week")
         static let model = NSTouchBarItem.Identifier(prefix + "model")
         static let context = NSTouchBarItem.Identifier(prefix + "context")
@@ -20,51 +19,13 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
     let touchBar = NSTouchBar()
     var onDecision: ((String, PermissionDecision) -> Void)?
     var onTrayTap: (() -> Void)?
-    var onSelectSession: ((String?) -> Void)?
     private var displayedRequestId: String?
 
-    /// One entry per live session in the picker popover.
-    struct SessionChoice { let id: String; let title: String; let color: NSColor; let selected: Bool }
-    private var choices: [SessionChoice] = []
-    private var picking = false
-    private static let choicePrefix = ID.prefix + "choice."
-    private static let autoId = NSTouchBarItem.Identifier(ID.prefix + "choice.auto")
-
-    /// Rebuilds the popover's buttons: one per session, plus "Auto" to go back to following
-    /// whichever session needs the user most.
-    func setSessions(_ list: [SessionChoice]) {
-        let key = { (c: [SessionChoice]) in c.map { "\($0.id)|\($0.selected)|\($0.title)" }.joined() }
-        guard key(list) != key(choices) else { return }
-        choices = list
-        if picking { showPicker() }   // keep an open picker in step with the sessions
-    }
-
-    /// The picker replaces the gauges for as long as it is open: a system-modal Touch Bar
-    /// cannot show an NSPopoverTouchBarItem, so we swap this bar's own layout instead.
-    private func showPicker() {
-        var ids: [NSTouchBarItem.Identifier] = [ID.activity]
-        for (i, _) in choices.enumerated().prefix(5) {
-            ids.append(NSTouchBarItem.Identifier(TouchBarController.choicePrefix + "\(i)"))
-        }
-        ids.append(TouchBarController.autoId)
-        picking = true
-        // Rebuild every button: titles and colours change between openings.
-        touchBar.templateItems = []
-        touchBar.defaultItemIdentifiers = ids
-    }
-
-    private func closePicker() {
-        picking = false
-        touchBar.defaultItemIdentifiers = pendingLayout ? promptLayout : idleLayout
-        applyPriorities(prompt: pendingLayout)
-    }
-
     private let gaugeWidth: CGFloat = 130
-    private lazy var g5h = GaugeView(title: "5h", width: gaugeWidth)
     private lazy var gWeek = GaugeView(title: "Week", width: gaugeWidth)
     private lazy var gModel = GaugeView(title: "Model", width: gaugeWidth)
     private lazy var gCtx = GaugeView(title: "Context", width: gaugeWidth)
-    private lazy var activity = ActivityView(target: self, action: #selector(activityTapped))
+    private lazy var activity = ActivityView()
     private lazy var info = InfoView(width: 340)
     private lazy var brand: NSTextField = {
         let l = NSTextField(labelWithString: "Claude")
@@ -95,11 +56,14 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
         touchBar.defaultItemIdentifiers = idleLayout
     }
 
+    /// Set false to drop the session dots from the bar entirely.
+    var showActivity = true { didSet { if showActivity != oldValue { relayout() } } }
+
     private var idleLayout: [NSTouchBarItem.Identifier] {
-        [ID.brand, ID.activity, ID.fiveHour, ID.week, ID.model, ID.context]
+        showActivity ? [ID.brand, ID.activity, ID.week, ID.model, ID.context] : [ID.brand, ID.week, ID.model, ID.context]
     }
     private var promptLayout: [NSTouchBarItem.Identifier] {
-        [ID.activity, ID.fiveHour, ID.week, ID.model, ID.context, .flexibleSpace, ID.info, ID.approve, ID.deny, ID.terminal]
+        (showActivity ? [ID.activity] : []) + [ID.week, ID.model, ID.context, .flexibleSpace, ID.info, ID.approve, ID.deny, ID.terminal]
     }
     /// Which items NSTouchBar would keep at `width` points, honouring visibilityPriority (used by the snapshot only).
     private func fitted(_ ids: [NSTouchBarItem.Identifier], width: CGFloat, spacing: CGFloat) -> [NSTouchBarItem.Identifier] {
@@ -144,22 +108,18 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
     private func priorities(prompt: Bool) -> [NSTouchBarItem.Identifier: NSTouchBarItem.Priority] {
         func P(_ v: Float) -> NSTouchBarItem.Priority { NSTouchBarItem.Priority(rawValue: v) }
         if prompt {
-            return [ID.brand: P(-1000), ID.model: P(-950), ID.week: P(-900), ID.fiveHour: P(-850), ID.context: P(-500), ID.activity: P(-300),
+            return [ID.brand: P(-1000), ID.model: P(-950), ID.week: P(-900), ID.context: P(-500), ID.activity: P(-300),
                     ID.terminal: P(0), ID.info: P(1000), ID.approve: P(1000), ID.deny: P(1000)]
         }
-        return [ID.brand: P(-1000), ID.model: P(-800), ID.week: P(0), ID.fiveHour: P(0), ID.context: P(0), ID.activity: P(900), ID.info: P(500)]
+        return [ID.brand: P(-1000), ID.model: P(-800), ID.week: P(0), ID.context: P(0), ID.activity: P(900), ID.info: P(500)]
     }
 
     // MARK: NSTouchBarDelegate
 
     func touchBar(_ touchBar: NSTouchBar, makeItemForIdentifier identifier: NSTouchBarItem.Identifier) -> NSTouchBarItem? {
-        if identifier == TouchBarController.autoId || identifier.rawValue.hasPrefix(TouchBarController.choicePrefix) {
-            return sessionChoiceItem(identifier)
-        }
         let item = NSCustomTouchBarItem(identifier: identifier)
         switch identifier {
         case ID.brand: item.view = brand; item.visibilityPriority = .low
-        case ID.fiveHour: item.view = g5h; item.visibilityPriority = .high
         case ID.week: item.view = gWeek; item.visibilityPriority = .low
         case ID.model: item.view = gModel; item.visibilityPriority = .normal
         case ID.context: item.view = gCtx; item.visibilityPriority = .high
@@ -174,31 +134,11 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
         return item
     }
 
-    private func sessionChoiceItem(_ identifier: NSTouchBarItem.Identifier) -> NSTouchBarItem? {
-        let item = NSCustomTouchBarItem(identifier: identifier)
-        let b: NSButton
-        if identifier == TouchBarController.autoId {
-            b = NSButton(title: "Auto", target: self, action: #selector(sessionPicked(_:)))
-            b.identifier = NSUserInterfaceItemIdentifier("auto")
-        } else {
-            let i = Int(identifier.rawValue.dropFirst(TouchBarController.choicePrefix.count)) ?? 0
-            guard i < choices.count else { return nil }
-            let c = choices[i]
-            b = NSButton(title: (c.selected ? "▸ " : "") + c.title, target: self, action: #selector(sessionPicked(_:)))
-            b.identifier = NSUserInterfaceItemIdentifier(c.id)
-            b.bezelColor = c.color.withAlphaComponent(c.selected ? 0.75 : 0.35)
-            b.attributedTitle = NSAttributedString(string: b.title, attributes: [
-                .foregroundColor: NSColor.white, .font: NSFont.systemFont(ofSize: 13, weight: c.selected ? .semibold : .regular)])
-        }
-        item.view = b
-        return item
-    }
-
     // MARK: content
 
-    func update(usage: UsageSnapshot?, session: SessionStatus?, request: PermissionRequest?, queued: Int = 0, act: SessionActivity? = nil, actExtra: Int = 0, actBadge: String? = nil, alert: String? = nil, now: Date = Date()) {
+    func update(usage: UsageSnapshot?, session: SessionStatus?, request: PermissionRequest?, queued: Int = 0, dots: [ActivityView.Dot] = [], now: Date = Date()) {
         displayedRequestId = request?.id
-        applyActivity(act, extra: actExtra, badge: actBadge, alert: alert, request: request, now: now)
+        applyActivity(dots)
         let stale = usage?.isStale ?? true
         func apply(_ g: GaugeView, _ l: UsageLimit?) {
             g.dimmed = stale || l == nil
@@ -216,17 +156,15 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
         }
         // Claude Code's own status line carries live 5h / 7d numbers after every turn. Prefer them when
         // they are fresher than the API snapshot (and use them outright while the API is unavailable).
-        var five = usage?.limit(.session), week = usage?.limit(.weeklyAll)
+        var week = usage?.limit(.weeklyAll)
         var fromStatusLine = false
         if let s = session, now.timeIntervalSince(s.updatedAt) < 3600 {
             let apiAge = usage?.lastSuccessAt.map { now.timeIntervalSince($0) } ?? .infinity
             let statusAge = now.timeIntervalSince(s.updatedAt)
             if stale || statusAge < apiAge {
-                if let p = s.fiveHourPercent { five = UsageLimit(kind: .session, label: "5h", percent: p, resetsAt: s.fiveHourResetsAt, severity: nil); fromStatusLine = true }
                 if let p = s.sevenDayPercent { week = UsageLimit(kind: .weeklyAll, label: "Week", percent: p, resetsAt: s.sevenDayResetsAt, severity: nil); fromStatusLine = true }
             }
         }
-        apply(g5h, five)
         apply(gWeek, week)
         apply(gModel, usage?.limit(.weeklyScoped))
         // The model-scoped weekly limit has no status-line fallback, so a rate-limited API would
@@ -237,7 +175,7 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
                 gModel.valueText = "\(Int(m.percent.rounded()))% · \(ResetFormat.elapsed(since: ok, now: now)) ago"
             }
         }
-        if fromStatusLine { if five != nil { g5h.dimmed = false }; if week != nil { gWeek.dimmed = false } }
+        if fromStatusLine, week != nil { gWeek.dimmed = false }
 
         if let s = session, let pct = s.contextUsedPercent {
             gCtx.dimmed = now.timeIntervalSince(s.updatedAt) > 3600
@@ -269,15 +207,14 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
             }
         }
 
-        if let five = five ?? usage?.limit(.session) {
-            trayButton.title = (usage?.isStale ?? true) && !fromStatusLine ? "C !" : "C \(Int(five.percent.rounded()))%"
+        if let w = week {
+            trayButton.title = (usage?.isStale ?? true) && !fromStatusLine ? "C !" : "C \(Int(w.percent.rounded()))%"
         } else {
             trayButton.title = "C"
         }
 
         let wantPrompt = request != nil
-        if wantPrompt && picking { closePicker() }   // a permission prompt outranks the picker
-        if wantPrompt != pendingLayout && !picking {
+        if wantPrompt != pendingLayout {
             pendingLayout = wantPrompt
             touchBar.defaultItemIdentifiers = wantPrompt ? promptLayout : idleLayout
             applyPriorities(prompt: wantPrompt)
@@ -285,31 +222,20 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
         }
     }
 
-    /// The left-hand pill: a coloured dot for what the session is doing. Kept dot-sized so the
-    /// usage gauges keep their room; extra sessions add a small count.
-    private func applyActivity(_ act: SessionActivity?, extra: Int, badge override: String?, alert: String?, request: PermissionRequest?, now: Date) {
-        _ = (override, extra)   // the dot is colour only: counts live in the picker and the menu
-        let badge = ""
-        if request != nil {
-            activity.set(state: .waiting, text: badge, tip: "Claude Code is waiting for your approval")
-            return
-        }
-        // Nothing can run: say so in red, whatever the sessions think they are doing.
-        if let alert = alert {
-            activity.set(state: .error, text: badge, tip: alert)
-            return
-        }
-        guard let a = act else {
-            activity.set(state: nil, text: "", tip: "No Claude Code session running")
-            return
-        }
-        // A "working" turn that has not checked in for a while is probably an abandoned terminal.
-        let stalled = (a.state == .working && now.timeIntervalSince(a.at) > 20 * 60) || a.state == .unknown
-        var tip = stalled ? "Working?" : a.state.label
-        if a.agents > 0 { tip += " · \(a.agents) background agent\(a.agents == 1 ? "" : "s")" }
-        if !a.shortCwd.isEmpty { tip += " · " + a.shortCwd }
-        if extra > 0 { tip += " (+\(extra) more · tap to switch)" }
-        activity.set(state: a.state, text: badge, tip: tip, hollow: stalled)
+    /// One dot per live session, most urgent first. A blocking problem (limit used up, no
+    /// network) paints every dot red, since it stops all of them alike.
+    private func applyActivity(_ dots: [ActivityView.Dot]) {
+        activity.set(dots)
+    }
+
+    private func relayout() {
+        touchBar.defaultItemIdentifiers = pendingLayout ? promptLayout : idleLayout
+        applyPriorities(prompt: pendingLayout)
+    }
+
+    /// Called with the session id of whichever dot was touched.
+    func onDotPick(_ handler: @escaping (String) -> Void) {
+        activity.onPick = handler
     }
 
     /// The session's name cut down to something that fits next to the model and the cost:
@@ -378,7 +304,6 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
     private func view(for id: NSTouchBarItem.Identifier) -> NSView? {
         switch id {
         case ID.brand: return brand
-        case ID.fiveHour: return g5h
         case ID.week: return gWeek
         case ID.model: return gModel
         case ID.context: return gCtx
@@ -443,15 +368,4 @@ final class TouchBarController: NSObject, NSTouchBarDelegate {
     @objc private func denyTapped() { if let id = displayedRequestId { onDecision?(id, .deny) } }
     @objc private func passTapped() { if let id = displayedRequestId { onDecision?(id, .pass) } }
     @objc private func trayTapped() { onTrayTap?() }
-    @objc private func activityTapped() {
-        NSLog("activity dot tapped (%d sessions)", choices.count)
-        if picking { closePicker() } else if !choices.isEmpty { showPicker() }
-    }
-
-    @objc private func sessionPicked(_ sender: NSButton) {
-        let id = sender.identifier?.rawValue
-        NSLog("session picked: %@", id ?? "auto")
-        closePicker()
-        onSelectSession?(id == "auto" ? nil : id)
-    }
 }
