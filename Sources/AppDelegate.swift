@@ -75,6 +75,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         perms.start()
         activity.start()
         shells.onChange = { [weak self] in self?.render() }
+        // Only worth asking while a session says it has stopped: that is the claim we check.
+        shells.shouldRun = { [weak self] in
+            self?.activity.sessions.contains { $0.state == .done } ?? false
+        }
         shells.start()
 
         if let snap = env["CLAUDE_TOUCHBAR_SNAPSHOT"] {
@@ -330,6 +334,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// A session changed state. Surface the bar (and chime) when it starts needing the user,
     /// so an answer waiting in a background terminal does not go unnoticed.
     private func activityChanged() {
+        // A turn just ended: check straight away whether a shell it started is still up,
+        // rather than letting the dot sit green until the next sweep.
+        if activity.sessions.contains(where: { $0.state == .done }) { shells.refresh(force: true) }
         render()
         guard let a = activity.current else { lastActivityKey = nil; return }
         let key = "\(a.sessionId):\(a.state.rawValue)"
@@ -435,7 +442,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func menuShow() { showBar() }
     @objc private func menuHide() { hideBar(byUser: true) }
-    @objc private func menuRefresh() { refreshUsage(); status.reload(); perms.reload(); activity.reload(); shells.refresh() }
+    @objc private func menuRefresh() { refreshUsage(); status.reload(); perms.reload(); activity.reload(); shells.refresh(force: true) }
     @objc private func menuOpenFolder() { NSWorkspace.shared.open(baseDir) }
     @objc private func menuOpenUsage() { NSWorkspace.shared.open(URL(string: "https://claude.ai/settings/usage")!) }
     @objc private func menuToggleControlStrip() {

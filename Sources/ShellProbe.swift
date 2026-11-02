@@ -12,12 +12,15 @@ final class ShellProbe {
     private var timer: Timer?
     private var running = false
     var onChange: (() -> Void)?
+    /// Asked before every sweep: the answer only matters while some session claims to be finished,
+    /// so an idle machine with nothing to correct costs nothing.
+    var shouldRun: () -> Bool = { true }
 
     /// Children younger than this are ignored: our own hooks and status line run for a moment on
     /// every turn and would otherwise read as work.
     private let minimumAge: TimeInterval = 3
 
-    func start(interval: TimeInterval = 5) {
+    func start(interval: TimeInterval = 10) {
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in self?.refresh() }
         timer?.tolerance = 1
@@ -28,8 +31,12 @@ final class ShellProbe {
         return busyTTYs.contains(t)
     }
 
-    func refresh() {
+    func refresh(force: Bool = false) {
         guard !running else { return }
+        guard force || shouldRun() else {
+            if !busyTTYs.isEmpty { busyTTYs = []; onChange?() }
+            return
+        }
         running = true
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let found = ShellProbe.scan(minimumAge: self?.minimumAge ?? 3)
