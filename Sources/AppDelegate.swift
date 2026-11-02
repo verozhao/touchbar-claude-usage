@@ -83,7 +83,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let fakeState = ActivityState(rawValue: env["CLAUDE_TOUCHBAR_SNAPSHOT_ACTIVITY"] ?? "") ?? .working
                 let fakeDots = (1...max(1, Int(env["CLAUDE_TOUCHBAR_SNAPSHOT_DOTS"] ?? "1") ?? 1)).map { i in
                     ActivityView.Dot(id: "snap\(i)", color: fakeState.color, hollow: fakeState == .unknown,
-                                     selected: i == 1, tip: "preview")
+                                     selected: i == 1, tip: "preview", symbol: fakeState.symbol)
                 }
                 self.bar.update(usage: snap0, session: self.status.current, request: fakeReq, dots: fakeDots)
                 self.bar.writeSnapshot(to: snap, width: CGFloat(Double(env["CLAUDE_TOUCHBAR_SNAPSHOT_WIDTH"] ?? "") ?? 1004))
@@ -239,8 +239,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let live = tracked()
         if let pin = pinnedSessionId, !live.contains(where: { $0.session.sessionId == pin }) { pinnedSessionId = nil }
         let shown = sessionToShow()
-        let act = live.first(where: { $0.session.sessionId == shown?.sessionId })?.act ?? live.first?.act
-        let extra = max(0, live.count - 1)
         let problem = blockingProblem()
         let dots: [ActivityView.Dot] = live.map { entry in
             let needsMe = perms.first?.sessionId == entry.session.sessionId
@@ -251,7 +249,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if let p = problem { tip = p }
             return ActivityView.Dot(id: entry.session.sessionId, color: state.color,
                                     hollow: state == .unknown, selected: entry.session.sessionId == shown?.sessionId,
-                                    tip: tip)
+                                    tip: tip, symbol: state.symbol)
         }
         bar.update(usage: usage.lastSnapshot, session: shown, request: perms.first,
                    queued: perms.pending.count, dots: dots)

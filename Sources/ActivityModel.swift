@@ -28,6 +28,15 @@ enum ActivityState: String {
         }
     }
 
+    /// Waiting draws as a raised hand instead of a plain dot: it is the one state that asks
+    /// the user to do something, so it should not need a colour memory to read.
+    var symbol: String? {
+        switch self {
+        case .waiting: return "hand.raised.fill"
+        default: return nil
+        }
+    }
+
     /// Sort order when several sessions report at once: the ones needing the user win.
     var rank: Int {
         switch self {
@@ -124,11 +133,13 @@ final class ActivityStore {
 
 /// One session: a coloured dot you can touch to follow that session.
 final class DotButton: NSButton {
-    static let size = NSSize(width: 18, height: 30)
+    static let size = NSSize(width: 20, height: 30)
     private let dotSize: CGFloat = 10
     var color: NSColor = NSColor(white: 1, alpha: 0.35)
     var hollow = false
     var selected = false
+    /// An SF Symbol drawn in place of the dot (the raised hand for "needs you").
+    var symbol: String? = nil
 
     init(target: AnyObject?, action: Selector) {
         super.init(frame: NSRect(origin: .zero, size: DotButton.size))
@@ -143,6 +154,24 @@ final class DotButton: NSButton {
 
     override var intrinsicContentSize: NSSize { DotButton.size }
 
+    /// An SF Symbol recoloured into its own transparent image. Tinting in place would flood the
+    /// tile, since the background behind the glyph is already opaque.
+    private static var tintCache: [String: NSImage] = [:]
+    static func tinted(_ name: String, _ color: NSColor) -> NSImage? {
+        let key = "\(name)|\(color.hashValue)"
+        if let hit = tintCache[key] { return hit }
+        guard let base = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 13, weight: .semibold)) else { return nil }
+        let out = NSImage(size: base.size, flipped: false) { rect in
+            base.draw(in: rect)
+            color.setFill()
+            rect.fill(using: .sourceAtop)
+            return true
+        }
+        tintCache[key] = out
+        return out
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         let c = NSRect(x: (bounds.width - dotSize) / 2, y: (bounds.height - dotSize) / 2, width: dotSize, height: dotSize)
         if isHighlighted {
@@ -156,6 +185,12 @@ final class DotButton: NSButton {
             ring.lineWidth = 1.5
             ring.stroke()
         }
+        if let sym = symbol.flatMap({ DotButton.tinted($0, color) }) {
+            let size = sym.size
+            sym.draw(in: NSRect(x: (bounds.width - size.width) / 2, y: (bounds.height - size.height) / 2,
+                                width: size.width, height: size.height))
+            return
+        }
         let path = NSBezierPath(ovalIn: c)
         if hollow {
             color.setStroke(); path.lineWidth = 2; path.stroke()
@@ -168,7 +203,14 @@ final class DotButton: NSButton {
 /// Touch Bar tile: one dot per live session, left to right, newest activity first.
 final class ActivityView: NSView {
     /// What each dot needs to draw itself.
-    struct Dot { let id: String; let color: NSColor; let hollow: Bool; let selected: Bool; let tip: String }
+    struct Dot {
+        let id: String
+        let color: NSColor
+        let hollow: Bool
+        let selected: Bool
+        let tip: String
+        var symbol: String? = nil
+    }
 
     static let maxDots = 5
     private let gap: CGFloat = 2
@@ -199,7 +241,7 @@ final class ActivityView: NSView {
         }
         ids = shown.map { $0.id }
         for (b, d) in zip(buttons, shown) {
-            b.color = d.color; b.hollow = d.hollow; b.selected = d.selected; b.toolTip = d.tip
+            b.color = d.color; b.hollow = d.hollow; b.selected = d.selected; b.toolTip = d.tip; b.symbol = d.symbol
             b.needsDisplay = true
         }
         // An empty bar still shows one hollow dot, so the tile never collapses to nothing.
