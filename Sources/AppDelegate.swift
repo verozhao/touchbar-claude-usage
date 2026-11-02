@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var status = StatusStore(dir: baseDir.appendingPathComponent("status"))
     private lazy var perms = PermissionQueue(baseDir: baseDir)
     private lazy var activity = ActivityStore(dir: baseDir.appendingPathComponent("activity"))
+    private let shells = ShellProbe()
     private let bar = TouchBarController()
     private var statusItem: NSStatusItem?
     private var usageTimer: Timer?
@@ -73,6 +74,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         status.start()
         perms.start()
         activity.start()
+        shells.onChange = { [weak self] in self?.render() }
+        shells.start()
 
         if let snap = env["CLAUDE_TOUCHBAR_SNAPSHOT"] {
             // Dev aid: render the bar offscreen (idle or prompt layout) and exit. Never touches the real Touch Bar.
@@ -305,8 +308,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let problem = blockingProblem()
         let dots: [ActivityView.Dot] = live.map { entry in
             let needsMe = perms.first?.sessionId == entry.session.sessionId
-            let state: ActivityState = problem != nil ? .error : (needsMe ? .waiting : entry.act.state)
+            // Stop fires while a shell the session launched is still running: trust the shell.
+            let busy = entry.act.state == .done && shells.isBusy(entry.act.tty)
+            var state: ActivityState = needsMe ? .waiting : (busy ? .working : entry.act.state)
+            if problem != nil { state = .error }
             var tip = state.label
+            if busy { tip += " · shell still running" }
             if entry.act.agents > 0 { tip += " · \(entry.act.agents) background agent\(entry.act.agents == 1 ? "" : "s")" }
             tip += " · " + TouchBarController.shortName(entry.session)
             if let p = problem { tip = p }
@@ -428,7 +435,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func menuShow() { showBar() }
     @objc private func menuHide() { hideBar(byUser: true) }
-    @objc private func menuRefresh() { refreshUsage(); status.reload(); perms.reload(); activity.reload() }
+    @objc private func menuRefresh() { refreshUsage(); status.reload(); perms.reload(); activity.reload(); shells.refresh() }
     @objc private func menuOpenFolder() { NSWorkspace.shared.open(baseDir) }
     @objc private func menuOpenUsage() { NSWorkspace.shared.open(URL(string: "https://claude.ai/settings/usage")!) }
     @objc private func menuToggleControlStrip() {
